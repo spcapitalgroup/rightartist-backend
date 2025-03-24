@@ -123,7 +123,7 @@ app.get("/", (req, res) => {
 });
 
 sequelize
-  .sync({ force: true })
+  .sync({ force: false })
   .then(async () => {
     console.log("✅ Database connected successfully");
     console.log("✅ Database & tables synced (force: true)");
@@ -200,6 +200,28 @@ sequelize
       });
       if (fanCreated) {
         console.log("✅ Test fan created with password 'fan123'");
+      }
+
+      console.log("Creating shop...")
+      const [shop, shopCreated] = await db.User.findOrCreate({
+        where: { email: "shop@test.com" },
+        defaults: {
+          id: "53857a86-b943-44bb-be32-aa0df82aad1e",
+          firstName: "Shop",
+          lastName: "User",
+          username: "shop.user",
+          email: "shop@test.com",
+          password: await bcrypt.hash("shop123", saltRounds),
+          userType: "shop",
+          isAdmin: false,
+          isPaid: true,
+          isElite: false,
+          portfolio: [],
+          paymentInfo: JSON.stringify({ bankAccount: "", routingNumber: "" }),
+        },
+      });
+      if (shopCreated) {
+        console.log("✅ Test shop created with password 'shop123'");
       }
     } catch (error) {
       console.error("❌ Error seeding data:", error.message);

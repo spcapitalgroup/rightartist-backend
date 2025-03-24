@@ -26,7 +26,7 @@ router.post("/:postId", async (req, res) => {
     const userType = user.userType;
     const feedType = post.feedType;
 
-    if (userType !== "designer") {
+    if (userType !== "designer" && userType !== "shop") {
       return res.status(403).json({ message: "Only designers can comment" });
     }
 
