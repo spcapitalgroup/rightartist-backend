@@ -5,37 +5,42 @@ const { Op } = require("sequelize");
 router.get("/", async (req, res) => {
   const { Post, User, Comment } = req.app.get("db");
   try {
-    const { page = 1, limit = 10, feedType } = req.query;
+    const { page = 1, limit = 10, feedType, postId } = req.query;
     const offset = (page - 1) * limit;
 
-    if (!["design", "booking"].includes(feedType)) {
+    if (!postId && !["design", "booking"].includes(feedType)) {
       console.log("❌ Invalid feed type:", feedType);
       return res.status(400).json({ message: "Invalid feed type" });
     }
 
     const userType = req.user.userType;
-    console.log("🔍 User accessing feed - ID:", req.user.id, "Type:", userType, "Feed:", feedType);
+    console.log("🔍 User accessing feed - ID:", req.user.id, "Type:", userType, "Feed:", feedType, "PostId:", postId);
 
     const allowedDesign = ["shop", "elite", "designer"];
     const allowedBooking = ["shop", "elite", "fan"];
-    if (
+    if (!postId && (
       (feedType === "design" && !allowedDesign.includes(userType)) ||
       (feedType === "booking" && !allowedBooking.includes(userType))
-    ) {
+    )) {
       console.log("❌ Unauthorized - UserType:", userType);
       return res.status(403).json({ message: "Unauthorized access to this feed" });
     }
 
-    let whereCondition = { feedType };
-    if (feedType === "design") {
-      whereCondition.artistId = { [Op.is]: null };
-      whereCondition.status = "open";
-    } else if (feedType === "booking") {
-      whereCondition = {
-        ...whereCondition,
-        [Op.or]: [{ clientId: { [Op.ne]: null } }, { shopId: { [Op.ne]: null } }],
-        status: "open",
-      };
+    let whereCondition = {};
+    if (postId) {
+      whereCondition = { id: postId };
+    } else {
+      whereCondition = { feedType };
+      if (feedType === "design") {
+        whereCondition.artistId = { [Op.is]: null };
+        whereCondition.status = "open";
+      } else if (feedType === "booking") {
+        whereCondition = {
+          ...whereCondition,
+          [Op.or]: [{ clientId: { [Op.ne]: null } }, { shopId: { [Op.ne]: null } }],
+          status: "open",
+        };
+      }
     }
 
     console.log("🔍 Fetching posts with condition:", whereCondition);
@@ -55,12 +60,17 @@ router.get("/", async (req, res) => {
         },
       ],
       order: [["createdAt", "DESC"]],
-      limit: parseInt(limit),
-      offset: parseInt(offset),
+      limit: postId ? undefined : parseInt(limit), // No limit if fetching a single post
+      offset: postId ? undefined : parseInt(offset), // No offset if fetching a single post
     });
 
-    const totalPosts = await Post.count({ where: whereCondition });
-    const nextPage = offset + parseInt(limit) < totalPosts ? parseInt(page) + 1 : null;
+    if (postId && posts.length === 0) {
+      console.log("❌ Post not found:", postId);
+      return res.status(404).json({ message: "Post not found" });
+    }
+
+    const totalPosts = postId ? undefined : await Post.count({ where: whereCondition });
+    const nextPage = postId ? null : (offset + parseInt(limit) < totalPosts ? parseInt(page) + 1 : null);
 
     console.log("✅ Posts fetched:", posts.length);
     res.json({ posts, nextPage });
