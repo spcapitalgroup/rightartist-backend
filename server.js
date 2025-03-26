@@ -102,8 +102,13 @@ const badgesRoutes = require("./routes/badgesRoutes");
 const notificationRoutes = require("./routes/notificationRoutes")(wss);
 const commentRoutes = require("./routes/commentRoutes");
 
-app.use("/api/auth/me", authenticateUser, authRoutes);
-app.use("/api/auth", authRoutes);
+// Mount authRoutes at /api to handle /api/signup, /api/login, etc.
+app.use("/api", authRoutes);
+
+// Mount /me routes with authentication
+app.use("/api/me", authenticateUser, authRoutes);
+
+// Mount other routes
 app.use("/api/feed/design", authenticateUser, feedRoutes);
 app.use("/api/feed/booking", authenticateUser, feedRoutes);
 app.use("/api/feed", authenticateUser, feedRoutes);
@@ -202,7 +207,7 @@ sequelize
         console.log("✅ Test fan created with password 'fan123'");
       }
 
-      console.log("Creating shop...")
+      console.log("Creating shop...");
       const [shop, shopCreated] = await db.User.findOrCreate({
         where: { email: "shop@test.com" },
         defaults: {

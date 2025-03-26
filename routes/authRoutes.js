@@ -24,9 +24,7 @@ router.post("/login", async (req, res) => {
       return res.status(400).json({ message: "Invalid credentials" });
     }
     const token = jwt.sign(
-      { id: user.id, userType: user.userType, isAdmin: user.isAdmin, isPaid: user.isPaid, isElite: user.isElite, firstName: user.firstName,
-        lastName: user.lastName
-       },
+      { id: user.id, userType: user.userType, isAdmin: user.isAdmin, isPaid: user.isPaid, isElite: user.isElite, firstName: user.firstName, lastName: user.lastName },
       process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
@@ -47,7 +45,7 @@ router.post("/signup", async (req, res) => {
       console.log("❌ Missing required fields:", req.body);
       return res.status(400).json({ message: "All fields are required" });
     }
-    if (!["fan", "designer", "shop"].includes(userType)) { // No "admin" or "elite"
+    if (!["fan", "designer", "shop"].includes(userType)) {
       console.log("❌ Invalid userType:", userType);
       return res.status(400).json({ message: "Invalid user type" });
     }
@@ -61,6 +59,8 @@ router.post("/signup", async (req, res) => {
     const isPaid = userType === "shop"; // Shop Pro starts paid
     const isElite = false; // Elite via upgrade
     const isAdmin = false; // No admin signup—seeded separately
+
+    console.log("🔍 Creating user with userType:", userType); // Debug: Confirm userType before creation
 
     const user = await User.create({
       id: require("uuid").v4(),
@@ -84,7 +84,21 @@ router.post("/signup", async (req, res) => {
     console.log("✅ User signed up successfully:", email, "Type:", userType);
     res.status(201).json({ message: "Signup successful", token });
   } catch (error) {
-    console.error("❌ Signup Error:", error.message);
+    console.error("❌ Signup Error:", error); // Log the full error object
+    if (error.name === "SequelizeUniqueConstraintError") {
+      if (error.fields.email) {
+        console.log("❌ Email already in use:", req.body.email);
+        return res.status(400).json({ message: "Email already in use" });
+      }
+      if (error.fields.username) {
+        console.log("❌ Username already in use:", req.body.firstName + "." + req.body.lastName);
+        return res.status(400).json({ message: "Username already in use" });
+      }
+    }
+    if (error.name === "SequelizeValidationError") {
+      console.log("❌ Validation Error Details:", error.errors);
+      return res.status(400).json({ message: "Validation error", errors: error.errors.map(e => e.message) });
+    }
     res.status(500).json({ message: "Server error", error: error.message });
   }
 });
