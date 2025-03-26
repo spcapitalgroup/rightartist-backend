@@ -2,6 +2,8 @@ const express = require("express");
 const router = express.Router();
 const multer = require("multer");
 const path = require("path");
+const sharp = require("sharp");
+const fs = require('fs');
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -12,6 +14,7 @@ const storage = multer.diskStorage({
     cb(null, `${uniqueSuffix}${path.extname(file.originalname)}`);
   },
 });
+
 const upload = multer({
   storage,
   fileFilter: (req, file, cb) => {
@@ -27,9 +30,61 @@ const upload = multer({
   limits: { fileSize: 5 * 1024 * 1024 },
 }).array("images", 5);
 
+const addWatermark = async (buffer, outputFilePath) => {
+  const watermarkText = "SPCapital \u00A9"; // Watermark text with copyright sign
+
+  try {
+    // First, get the image's dimensions
+    const { width, height } = await sharp(buffer).metadata();
+
+    // Create the watermark SVG, but scale it to fit the image's size
+    const watermarkSVG = `<svg width="${width / 2}" height="${height / 10}">
+      <text x="10" y="${height / 15}" font-family="Arial" font-size="30" fill="black">${watermarkText}</text>
+    </svg>`;
+
+    // Apply the watermark using sharp
+    await sharp(buffer)
+      .composite([
+        {
+          input: Buffer.from(watermarkSVG),
+          gravity: "centre", // Position watermark at bottom-right corner
+          top: 20,
+          left: 10
+        },
+      ])
+      .toFile(outputFilePath); // Save watermarked image to the disk
+
+    return outputFilePath;
+  } catch (error) {
+    throw new Error("Error adding watermark: " + error.message);
+  }
+};
+
 router.post("/", upload, async (req, res) => {
   console.log("🔍 Files received:", req.files);
   console.log("🔍 Body after multer:", req.body);
+
+  console.log("Applying Watermark to uploaded files");
+  try {
+    // Loop through each uploaded file and add the watermark
+    for (const file of req.files) {
+      const filePath = path.join( "uploads", file.filename);
+      const outputFilePath = path.join("uploads", "watermarked-" + file.filename);
+
+      // Add watermark inside the Multer function
+      const watermarkedFilePath = await addWatermark(filePath, outputFilePath);
+
+      // Optionally, delete the original file after processing
+      fs.unlinkSync(filePath);
+
+      // Update file to reflect the new watermarked file
+      file.filename = path.basename(watermarkedFilePath);
+    }
+
+  } catch (error) {
+    console.error(error);
+    throw new Error(error);
+  }
 
   const { Post, User, Notification } = req.app.get("db");
   const wss = req.app.get("wss"); // Get WebSocket server from app
