@@ -1,5 +1,66 @@
 const express = require("express");
 const router = express.Router();
+const multer = require("multer");
+const path = require("path");
+const fs = require("fs");
+const sharp = require("sharp");
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, "uploads");
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+    cb(null, `${uniqueSuffix}${path.extname(file.originalname)}`);
+  },
+});
+
+const upload = multer({
+  storage,
+  fileFilter: (req, file, cb) => {
+    console.log("🔍 Multer received file:", file);
+    const filetypes = /jpeg|jpg|png/;
+    const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = filetypes.test(file.mimetype);
+    if (extname && mimetype) {
+      return cb(null, true);
+    }
+    cb(new Error("Only JPEG/JPG/PNG images are allowed"));
+  },
+  limits: { fileSize: 5 * 1024 * 1024 },
+}).array("images", 5);
+
+const addWatermark = async (buffer, outputFilePath) => {
+  const watermarkText = "SPCapital \u00A9"; // Watermark text with copyright sign
+
+  try {
+    // Get the image's dimensions
+    const { width, height } = await sharp(buffer).metadata();
+
+    // Create the watermark SVG, scaled to fit the image's size
+    const watermarkSVG = `<svg width="${width / 2}" height="${height / 10}">
+      <text x="10" y="${height / 15}" font-family="Arial" font-size="30" fill="black">${watermarkText}</text>
+    </svg>`;
+
+    // Apply the watermark using sharp
+    await sharp(buffer)
+      .composite([
+        {
+          input: Buffer.from(watermarkSVG),
+          gravity: "centre",
+          top: 20,
+          left: 10,
+        },
+      ])
+      .toFile(outputFilePath); // Save watermarked image to the disk
+
+    console.log("✅ Watermark added to:", outputFilePath);
+    return outputFilePath;
+  } catch (error) {
+    console.error("❌ Error adding watermark:", error.message);
+    throw new Error("Error adding watermark: " + error.message);
+  }
+};
 
 router.get("/inbox", async (req, res) => {
   const { Message, User } = req.app.get("db");
@@ -37,7 +98,7 @@ router.get("/users", async (req, res) => {
   const { User, Post, Comment } = req.app.get("db");
   try {
     let users = [];
-    if (req.user.userType === "admin") { // Use userType for Admin
+    if (req.user.userType === "admin") {
       users = []; // Admin sees no one
       console.log("✅ Admin user fetch blocked:", req.user.id);
     } else if (req.user.userType === "shop") {
@@ -57,12 +118,12 @@ router.get("/users", async (req, res) => {
       users = [...designers, ...fans];
     } else if (req.user.userType === "designer") {
       users = await User.findAll({
-        where: { userType: "shop" }, // Admin excluded by type
+        where: { userType: "shop" },
         attributes: ["id", "username"],
       });
     } else if (req.user.userType === "fan") {
       users = await User.findAll({
-        where: { userType: "shop" }, // Admin excluded by type
+        where: { userType: "shop" },
         attributes: ["id", "username"],
       });
     }
@@ -75,11 +136,12 @@ router.get("/users", async (req, res) => {
   }
 });
 
-router.post("/send", async (req, res) => {
+router.post("/send", upload, async (req, res) => {
   const { Message, User, Notification, Post, Comment } = req.app.get("db");
   const clients = req.app.get("wsClients");
+  const { receiverId, content } = req.body;
+
   try {
-    const { receiverId, content } = req.body;
     if (!receiverId || !content) {
       return res.status(400).json({ message: "Receiver ID and content required" });
     }
@@ -96,7 +158,7 @@ router.post("/send", async (req, res) => {
       return res.status(404).json({ message: "Sender not found" });
     }
 
-    if (sender.userType === "admin" || receiver.userType === "admin") { // Use userType for Admin
+    if (sender.userType === "admin" || receiver.userType === "admin") {
       console.log("❌ Admin cannot send or receive messages:", sender.id, "to", receiver.id);
       return res.status(403).json({ message: "Admin cannot send or receive messages" });
     }
@@ -122,12 +184,32 @@ router.post("/send", async (req, res) => {
       }
     }
 
+    // Handle image uploads
+    let imageFilenames = [];
+    if (req.files && req.files.length > 0) {
+      console.log("🔍 Applying watermark to message images");
+      try {
+        for (const file of req.files) {
+          const filePath = path.join("uploads", file.filename);
+          const outputFilePath = path.join("uploads", "watermarked-" + file.filename);
+          const buffer = fs.readFileSync(filePath);
+          const watermarkedFilePath = await addWatermark(buffer, outputFilePath);
+          fs.unlinkSync(filePath);
+          imageFilenames.push(path.basename(watermarkedFilePath));
+        }
+      } catch (error) {
+        console.error("❌ Watermark Application Error:", error.message);
+        return res.status(500).json({ message: "Error applying watermark", error: error.message });
+      }
+    }
+
     const message = await Message.create({
       id: require("uuid").v4(),
       senderId: req.user.id,
       receiverId,
       content,
       isRead: false,
+      images: imageFilenames,
     });
 
     const ws = clients.get(receiverId);
