@@ -108,6 +108,8 @@ const Message = sequelize.define("Message", {
   receiverId: { type: Sequelize.UUID, allowNull: false },
   content: { type: Sequelize.TEXT, allowNull: false },
   images: { type: Sequelize.JSON, defaultValue: [] },
+  designId: { type: Sequelize.UUID, allowNull: true }, // Added designId field
+  stage: { type: Sequelize.ENUM("initial_sketch", "revision_1", "revision_2", "revision_3", "final_draft", "final_design"), allowNull: true }, // Added stage field
   createdAt: { type: Sequelize.DATE, defaultValue: Sequelize.NOW },
   isRead: { type: Sequelize.BOOLEAN, defaultValue: false },
 });
@@ -130,7 +132,7 @@ const Notification = sequelize.define("Notification", {
   id: { type: Sequelize.UUID, defaultValue: Sequelize.UUIDV4, primaryKey: true },
   userId: { type: Sequelize.UUID, allowNull: false },
   message: { type: Sequelize.STRING, allowNull: false },
-  isRead: { type: Sequelize.BOOLEAN, defaultValue: false }, // Added isRead field
+  isRead: { type: Sequelize.BOOLEAN, defaultValue: false },
   createdAt: { type: Sequelize.DATE, defaultValue: Sequelize.NOW },
 });
 
@@ -160,6 +162,7 @@ User.hasMany(Message, { foreignKey: "senderId", as: "sentMessages" });
 User.hasMany(Message, { foreignKey: "receiverId", as: "receivedMessages" });
 Message.belongsTo(User, { foreignKey: "senderId", as: "sender" });
 Message.belongsTo(User, { foreignKey: "receiverId", as: "receiver" });
+Message.belongsTo(Design, { foreignKey: "designId", as: "design" }); // Added association
 
 Design.belongsTo(User, { foreignKey: "designerId", as: "designer" });
 Design.belongsTo(User, { foreignKey: "shopId", as: "shop" });
@@ -241,7 +244,7 @@ const commentRoutes = require("./routes/commentRoutes");
 const messageRoutes = require("./routes/messageRoutes");
 const designRoutes = require("./routes/designRoutes");
 const statsRoutes = require("./routes/statsRoutes");
-const notificationRoutes = require("./routes/notificationRoutes")(wss); // Mount notification routes with wss
+const notificationRoutes = require("./routes/notificationRoutes")(wss);
 
 console.log("🔍 Mounting authRoutes for /api/auth/login, /api/auth/signup, /api/auth/me, etc.");
 app.use("/api/auth", authRoutes);
@@ -369,6 +372,26 @@ app.listen(port, async () => {
       console.log("✅ Added images column to Messages table");
     } else {
       console.log("ℹ️ images column already exists in Messages table");
+    }
+
+    // Add designId column to Messages if it doesn't exist
+    console.log("🔍 Checking for designId column in Messages table...");
+    const hasDesignIdColumn = messageResults.some((column) => column.name === "designId");
+    if (!hasDesignIdColumn) {
+      await sequelize.query("ALTER TABLE Messages ADD COLUMN designId UUID;");
+      console.log("✅ Added designId column to Messages table");
+    } else {
+      console.log("ℹ️ designId column already exists in Messages table");
+    }
+
+    // Add stage column to Messages if it doesn't exist
+    console.log("🔍 Checking for stage column in Messages table...");
+    const hasStageColumn = messageResults.some((column) => column.name === "stage");
+    if (!hasStageColumn) {
+      await sequelize.query('ALTER TABLE Messages ADD COLUMN stage STRING;');
+      console.log("✅ Added stage column to Messages table");
+    } else {
+      console.log("ℹ️ stage column already exists in Messages table");
     }
 
     // Create admin user

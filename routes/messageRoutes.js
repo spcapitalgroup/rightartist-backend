@@ -68,7 +68,10 @@ router.get("/inbox", async (req, res) => {
     const messages = await Message.findAll({
       where: { receiverId: req.user.id },
       order: [["createdAt", "DESC"]],
-      include: [{ model: User, as: "sender", attributes: ["id", "username"] }],
+      include: [
+        { model: User, as: "sender", attributes: ["id", "username"] },
+        { model: User, as: "receiver", attributes: ["id", "username"] },
+      ],
     });
     console.log("✅ Inbox fetched for user:", req.user.id);
     res.json({ messages });
@@ -84,7 +87,10 @@ router.get("/sent", async (req, res) => {
     const messages = await Message.findAll({
       where: { senderId: req.user.id },
       order: [["createdAt", "DESC"]],
-      include: [{ model: User, as: "sender", attributes: ["id", "username"] }],
+      include: [
+        { model: User, as: "sender", attributes: ["id", "username"] },
+        { model: User, as: "receiver", attributes: ["id", "username"] },
+      ],
     });
     console.log("✅ Sent messages fetched for user:", req.user.id);
     res.json({ messages });
@@ -137,13 +143,17 @@ router.get("/users", async (req, res) => {
 });
 
 router.post("/send", upload, async (req, res) => {
-  const { Message, User, Notification, Post, Comment } = req.app.get("db");
+  const { Message, User, Notification, Post, Comment, Design } = req.app.get("db");
   const clients = req.app.get("wsClients");
-  const { receiverId, content } = req.body;
+  const { receiverId, content, designId, stage } = req.body;
 
   try {
     if (!receiverId || !content) {
       return res.status(400).json({ message: "Receiver ID and content required" });
+    }
+
+    if (stage && !["initial_sketch", "revision_1", "revision_2", "revision_3", "final_draft", "final_design"].includes(stage)) {
+      return res.status(400).json({ message: "Invalid stage" });
     }
 
     const receiver = await User.findByPk(receiverId);
@@ -184,6 +194,17 @@ router.post("/send", upload, async (req, res) => {
       }
     }
 
+    let design = null;
+    if (designId) {
+      design = await Design.findByPk(designId);
+      if (!design) {
+        return res.status(404).json({ message: "Design not found" });
+      }
+      if (design.designerId !== req.user.id && design.shopId !== req.user.id) {
+        return res.status(403).json({ message: "You can only send messages related to designs you are part of" });
+      }
+    }
+
     // Handle image uploads
     let imageFilenames = [];
     if (req.files && req.files.length > 0) {
@@ -208,6 +229,8 @@ router.post("/send", upload, async (req, res) => {
       senderId: req.user.id,
       receiverId,
       content,
+      designId: designId || null,
+      stage: stage || null,
       isRead: false,
       images: imageFilenames,
     });
@@ -219,6 +242,20 @@ router.post("/send", upload, async (req, res) => {
       console.log("✅ WebSocket message sent to:", receiverId);
     } else {
       console.warn("⚠️ Receiver's WebSocket client not available:", receiverId);
+    }
+
+    // If this is a stage update, notify DesignsPage
+    if (designId && stage) {
+      const senderClient = clients.get(req.user.id);
+      const receiverClient = clients.get(receiverId);
+      if (senderClient && senderClient.readyState === 1) {
+        senderClient.send(JSON.stringify({ type: "stage-update", designId }));
+        console.log("✅ WebSocket stage-update sent to sender:", req.user.id);
+      }
+      if (receiverClient && receiverClient.readyState === 1) {
+        receiverClient.send(JSON.stringify({ type: "stage-update", designId }));
+        console.log("✅ WebSocket stage-update sent to receiver:", receiverId);
+      }
     }
 
     const notificationMessage = `New message from ${sender.username}`;

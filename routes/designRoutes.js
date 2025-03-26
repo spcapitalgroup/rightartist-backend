@@ -126,7 +126,6 @@ router.get("/purchased", async (req, res) => {
   }
 });
 
-// New endpoint for designers to fetch sold designs
 router.get("/sold", async (req, res) => {
   const { Design, User, Post, Comment } = req.app.get("db");
   try {
@@ -157,8 +156,44 @@ router.get("/sold", async (req, res) => {
   }
 });
 
+// New endpoint to fetch designs for a specific conversation
+router.get("/conversation/:designerId/:shopId", async (req, res) => {
+  const { Design, User, Post, Comment } = req.app.get("db");
+  const { designerId, shopId } = req.params;
+  try {
+    const userType = req.user.userType;
+    if (userType !== "designer" && userType !== "shop") {
+      return res.status(403).json({ message: "Only designers and shop users can access designs" });
+    }
+
+    if (req.user.id !== designerId && req.user.id !== shopId) {
+      return res.status(403).json({ message: "You can only access designs you are part of" });
+    }
+
+    const designs = await Design.findAll({
+      where: {
+        designerId,
+        shopId,
+      },
+      include: [
+        { model: User, as: "designer", attributes: ["id", "username"] },
+        { model: User, as: "shop", attributes: ["id", "username"] },
+        { model: Post, as: "Post", attributes: ["id", "title"] },
+        { model: Comment, attributes: ["id", "content"] },
+      ],
+      order: [["createdAt", "DESC"]],
+    });
+
+    console.log(`✅ Fetched designs for conversation between designer ${designerId} and shop ${shopId}`);
+    res.json({ designs });
+  } catch (error) {
+    console.error("❌ Fetch Conversation Designs Error:", error.message);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
 router.post("/accept/:commentId", async (req, res) => {
-  const { Design, Comment, Post, User, Notification } = req.app.get("db");
+  const { Design, Comment, Post, User, Notification, Message } = req.app.get("db");
   const clients = req.app.get("wsClients");
   const { commentId } = req.params;
 
@@ -227,7 +262,28 @@ router.post("/accept/:commentId", async (req, res) => {
       console.log("✅ WebSocket notification sent to designer:", designer.id);
     }
 
-    console.log("✅ Design accepted:", design.id);
+    // Create an initial message to start the conversation
+    const initialMessage = await Message.create({
+      id: require("uuid").v4(),
+      senderId: req.user.id,
+      receiverId: designer.id,
+      content: `I’ve accepted your design for "${post.title}". Let’s discuss the details!`,
+      designId: design.id,
+      images: [],
+    });
+
+    const shopClient = clients.get(req.user.id);
+    if (shopClient && shopClient.readyState === 1) {
+      shopClient.send(JSON.stringify({ type: "message", message: initialMessage }));
+      console.log("✅ WebSocket message sent to shop:", req.user.id);
+    }
+
+    if (designerClient && designerClient.readyState === 1) {
+      designerClient.send(JSON.stringify({ type: "message", message: initialMessage }));
+      console.log("✅ WebSocket message sent to designer:", designer.id);
+    }
+
+    console.log("✅ Design accepted and conversation initiated:", design.id);
     res.status(201).json({ message: "Design accepted", data: design });
   } catch (error) {
     console.error("❌ Accept Design Error:", error.message);
@@ -236,7 +292,7 @@ router.post("/accept/:commentId", async (req, res) => {
 });
 
 router.put("/:designId/stage", upload, async (req, res) => {
-  const { Design, User, Notification } = req.app.get("db");
+  const { Design, User, Notification, Message } = req.app.get("db");
   const clients = req.app.get("wsClients");
   const { designId } = req.params;
   const { stage } = req.body;
@@ -250,6 +306,7 @@ router.put("/:designId/stage", upload, async (req, res) => {
       include: [
         { model: User, as: "designer" },
         { model: User, as: "shop" },
+        { model: Post, as: "Post" },
       ],
     });
     if (!design) {
@@ -284,7 +341,7 @@ router.put("/:designId/stage", upload, async (req, res) => {
 
     await design.update({ stage, images: imageFilenames });
 
-    const notificationMessage = `Design stage updated to "${stage}" by ${design.designer.username}`;
+    const notificationMessage = `Design stage updated to "${stage}" by ${design.designer.username} for "${design.Post.title}"`;
     const notification = await Notification.create({
       id: require("uuid").v4(),
       userId: design.shopId,
@@ -295,6 +352,38 @@ router.put("/:designId/stage", upload, async (req, res) => {
     if (shopClient && shopClient.readyState === 1) {
       shopClient.send(JSON.stringify({ type: "notification", data: notification.message }));
       console.log("✅ WebSocket notification sent to shop:", design.shopId);
+    }
+
+    // Create a message to notify the shop user of the stage update
+    const stageUpdateMessage = await Message.create({
+      id: require("uuid").v4(),
+      senderId: req.user.id,
+      receiverId: design.shopId,
+      content: `I’ve updated the design for "${design.Post.title}" to stage: ${stage}`,
+      designId: design.id,
+      stage: stage,
+      images: imageFilenames,
+    });
+
+    const designerClient = clients.get(req.user.id);
+    if (designerClient && designerClient.readyState === 1) {
+      designerClient.send(JSON.stringify({ type: "message", message: stageUpdateMessage }));
+      console.log("✅ WebSocket message sent to designer:", req.user.id);
+    }
+
+    if (shopClient && shopClient.readyState === 1) {
+      shopClient.send(JSON.stringify({ type: "message", message: stageUpdateMessage }));
+      console.log("✅ WebSocket message sent to shop:", design.shopId);
+    }
+
+    // Notify DesignsPage of the stage update
+    if (shopClient && shopClient.readyState === 1) {
+      shopClient.send(JSON.stringify({ type: "stage-update", designId: design.id }));
+      console.log("✅ WebSocket stage-update sent to shop:", design.shopId);
+    }
+    if (designerClient && designerClient.readyState === 1) {
+      designerClient.send(JSON.stringify({ type: "stage-update", designId: design.id }));
+      console.log("✅ WebSocket stage-update sent to designer:", req.user.id);
     }
 
     console.log("✅ Design stage updated:", design.id);
@@ -315,6 +404,7 @@ router.post("/:designId/purchase", async (req, res) => {
       include: [
         { model: User, as: "designer" },
         { model: User, as: "shop" },
+        { model: Post, as: "Post" },
       ],
     });
     if (!design) {
@@ -343,7 +433,7 @@ router.post("/:designId/purchase", async (req, res) => {
       type: "design_purchase",
     });
 
-    const notificationMessage = `Your design has been purchased by ${design.shop.username} for $${design.price}`;
+    const notificationMessage = `Your design for "${design.Post.title}" has been purchased by ${design.shop.username} for $${design.price}`;
     const notification = await Notification.create({
       id: require("uuid").v4(),
       userId: design.designerId,
