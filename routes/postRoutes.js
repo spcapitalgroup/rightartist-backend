@@ -3,7 +3,7 @@ const router = express.Router();
 const multer = require("multer");
 const path = require("path");
 const sharp = require("sharp");
-const fs = require('fs');
+const fs = require("fs");
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -34,10 +34,10 @@ const addWatermark = async (buffer, outputFilePath) => {
   const watermarkText = "SPCapital \u00A9"; // Watermark text with copyright sign
 
   try {
-    // First, get the image's dimensions
+    // Get the image's dimensions
     const { width, height } = await sharp(buffer).metadata();
 
-    // Create the watermark SVG, but scale it to fit the image's size
+    // Create the watermark SVG, scaled to fit the image's size
     const watermarkSVG = `<svg width="${width / 2}" height="${height / 10}">
       <text x="10" y="${height / 15}" font-family="Arial" font-size="30" fill="black">${watermarkText}</text>
     </svg>`;
@@ -47,15 +47,17 @@ const addWatermark = async (buffer, outputFilePath) => {
       .composite([
         {
           input: Buffer.from(watermarkSVG),
-          gravity: "centre", // Position watermark at bottom-right corner
+          gravity: "centre",
           top: 20,
-          left: 10
+          left: 10,
         },
       ])
       .toFile(outputFilePath); // Save watermarked image to the disk
 
+    console.log("✅ Watermark added to:", outputFilePath);
     return outputFilePath;
   } catch (error) {
+    console.error("❌ Error adding watermark:", error.message);
     throw new Error("Error adding watermark: " + error.message);
   }
 };
@@ -64,26 +66,30 @@ router.post("/", upload, async (req, res) => {
   console.log("🔍 Files received:", req.files);
   console.log("🔍 Body after multer:", req.body);
 
-  console.log("Applying Watermark to uploaded files");
-  try {
-    // Loop through each uploaded file and add the watermark
-    for (const file of req.files) {
-      const filePath = path.join( "uploads", file.filename);
-      const outputFilePath = path.join("uploads", "watermarked-" + file.filename);
+  // Apply watermark to uploaded files
+  if (req.files && req.files.length > 0) {
+    console.log("🔍 Applying watermark to uploaded files");
+    try {
+      for (const file of req.files) {
+        const filePath = path.join("uploads", file.filename);
+        const outputFilePath = path.join("uploads", "watermarked-" + file.filename);
 
-      // Add watermark inside the Multer function
-      const watermarkedFilePath = await addWatermark(filePath, outputFilePath);
+        // Read the file into a buffer for sharp
+        const buffer = fs.readFileSync(filePath);
 
-      // Optionally, delete the original file after processing
-      fs.unlinkSync(filePath);
+        // Add watermark
+        const watermarkedFilePath = await addWatermark(buffer, outputFilePath);
 
-      // Update file to reflect the new watermarked file
-      file.filename = path.basename(watermarkedFilePath);
+        // Delete the original file after processing
+        fs.unlinkSync(filePath);
+
+        // Update file to reflect the new watermarked file
+        file.filename = path.basename(watermarkedFilePath);
+      }
+    } catch (error) {
+      console.error("❌ Watermark Application Error:", error.message);
+      return res.status(500).json({ message: "Error applying watermark", error: error.message });
     }
-
-  } catch (error) {
-    console.error(error);
-    throw new Error(error);
   }
 
   const { Post, User, Notification } = req.app.get("db");
@@ -119,6 +125,7 @@ router.post("/", upload, async (req, res) => {
     }
 
     let postData = {
+      userId: user.id, // Set userId to the authenticated user's ID
       title,
       description,
       location,
@@ -173,7 +180,7 @@ router.post("/", upload, async (req, res) => {
     res.status(201).json({ data: newPost });
   } catch (error) {
     console.error("❌ Post Creation Error:", error.message);
-    res.status(500).json({ message: "Server error" });
+    res.status(500).json({ message: "Server error", error: error.message });
   }
 });
 

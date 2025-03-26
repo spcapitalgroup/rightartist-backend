@@ -2,6 +2,7 @@ const express = require("express");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const router = express.Router();
+const authenticateUser = require("../middleware/authMiddleware"); // Import the middleware
 
 router.post("/login", async (req, res) => {
   const { User } = req.app.get("db");
@@ -103,7 +104,7 @@ router.post("/signup", async (req, res) => {
   }
 });
 
-router.get("/me", async (req, res) => {
+router.get("/me", authenticateUser, async (req, res) => {
   const { User } = req.app.get("db");
   try {
     if (!req.user || !req.user.id) {
@@ -127,10 +128,10 @@ router.get("/me", async (req, res) => {
   }
 });
 
-router.put("/me", async (req, res) => {
+router.put("/me", authenticateUser, async (req, res) => {
   const { User } = req.app.get("db");
   try {
-    const { firstName, lastName, password, paymentInfo, notifications, isElite } = req.body; // Added isElite
+    const { firstName, lastName, password, paymentInfo, notifications, isElite } = req.body;
     if (!req.user || !req.user.id) {
       console.log("❌ No user in request - Headers:", req.headers.authorization, "Body:", req.body);
       return res.status(401).json({ message: "Unauthorized" });
@@ -151,7 +152,7 @@ router.put("/me", async (req, res) => {
     if (password) updates.password = await bcrypt.hash(password, 10);
     if (paymentInfo) updates.paymentInfo = JSON.stringify(paymentInfo);
     if (typeof notifications === "boolean") updates.notifications = notifications;
-    if (typeof isElite === "boolean") updates.isElite = isElite; // Allow Elite toggle
+    if (typeof isElite === "boolean") updates.isElite = isElite;
 
     await user.update(updates);
     console.log("✅ User Updated:", user.toJSON());

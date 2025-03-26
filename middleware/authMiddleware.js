@@ -19,6 +19,7 @@ const authenticateUser = (req, res, next) => {
 
   try {
     const secret = process.env.JWT_SECRET;
+    console.log("🔍 JWT_SECRET in authMiddleware:", secret ? "Set" : "Not set"); // Debug: Confirm JWT_SECRET
     if (!secret) {
       console.error("❌ Missing JWT_SECRET in environment variables");
       return res.status(500).json({ message: "Internal Server Error: Missing JWT_SECRET" });
@@ -33,6 +34,7 @@ const authenticateUser = (req, res, next) => {
     }
 
     req.user = decoded;
+    console.log("🔍 Set req.user:", req.user);
     next();
   } catch (error) {
     console.error("❌ Token Verification Error:", error.message);
