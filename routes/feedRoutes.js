@@ -56,11 +56,11 @@ router.get("/", async (req, res) => {
           model: Comment,
           as: "comments",
           include: [
-            { model: User, as: "user", attributes: ["id", "username"] },
+            { model: User, as: "user", attributes: ["id", "username", "userType"] }, // Include userType
             {
               model: Comment,
               as: "replies",
-              include: [{ model: User, as: "user", attributes: ["id", "username"] }],
+              include: [{ model: User, as: "user", attributes: ["id", "username", "userType"] }], // Include userType
             },
             { model: Post, as: "Post" }, // Updated alias to "Post"
           ],

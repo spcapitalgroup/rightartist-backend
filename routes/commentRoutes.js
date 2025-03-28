@@ -4,6 +4,7 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 const sharp = require("sharp");
+const { v4: uuidv4 } = require("uuid");
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -31,18 +32,15 @@ const upload = multer({
 }).array("images", 5);
 
 const addWatermark = async (buffer, outputFilePath) => {
-  const watermarkText = "SPCapital \u00A9"; // Watermark text with copyright sign
+  const watermarkText = "SPCapital \u00A9";
 
   try {
-    // Get the image's dimensions
     const { width, height } = await sharp(buffer).metadata();
 
-    // Create the watermark SVG, scaled to fit the image's size
     const watermarkSVG = `<svg width="${width / 2}" height="${height / 10}">
       <text x="10" y="${height / 15}" font-family="Arial" font-size="30" fill="black">${watermarkText}</text>
     </svg>`;
 
-    // Apply the watermark using sharp
     await sharp(buffer)
       .composite([
         {
@@ -52,7 +50,7 @@ const addWatermark = async (buffer, outputFilePath) => {
           left: 10,
         },
       ])
-      .toFile(outputFilePath); // Save watermarked image to the disk
+      .toFile(outputFilePath);
 
     console.log("✅ Watermark added to:", outputFilePath);
     return outputFilePath;
@@ -65,7 +63,7 @@ const addWatermark = async (buffer, outputFilePath) => {
 router.post("/:postId", upload, async (req, res) => {
   const { Post, User, Comment, Notification } = req.app.get("db");
   const clients = req.app.get("wsClients");
-  const { content, parentId, price } = req.body;
+  const { content, parentId, price, estimatedDuration, availability } = req.body;
   const { postId } = req.params;
 
   try {
@@ -87,12 +85,10 @@ router.post("/:postId", upload, async (req, res) => {
     const userType = user.userType;
     const feedType = post.feedType;
 
-    // Restrict designers to only comment on design feed posts
     if (userType === "designer" && feedType !== "design") {
       return res.status(403).json({ message: "Designers can only comment on design feed posts" });
     }
 
-    // Allow shop users to comment on both design and booking feed posts
     if (userType !== "designer" && userType !== "shop") {
       return res.status(403).json({ message: "Only designers and shop users can comment" });
     }
@@ -119,7 +115,6 @@ router.post("/:postId", upload, async (req, res) => {
       }
     }
 
-    // Handle image uploads (only for designers on design feed posts)
     let imageFilenames = [];
     if (req.files && req.files.length > 0) {
       if (userType !== "designer" || feedType !== "design") {
@@ -147,13 +142,40 @@ router.post("/:postId", upload, async (req, res) => {
       userId: user.id,
       postId,
       parentId: parentId || null,
-      price: feedType === "design" ? parseFloat(price) || 0 : null,
+      price: feedType === "design" ? parseFloat(price) || 0 : parseFloat(price) || null,
+      estimatedDuration: feedType === "booking" ? estimatedDuration || null : null,
+      availability: feedType === "booking" ? availability || null : null,
       images: imageFilenames,
     });
 
     console.log("✅ Comment created:", comment.id);
 
-    // Notify post owner
+    if (feedType === "booking" && userType === "shop" && !parentId) {
+      const fanUser = await User.findByPk(post.userId);
+      if (fanUser) {
+        const notification = {
+          id: uuidv4(),
+          userId: fanUser.id,
+          message: `${user.firstName} ${user.lastName} has pitched on your booking "${post.title}".`,
+          isRead: false,
+          createdAt: new Date(),
+        };
+        await Notification.create(notification);
+        console.log("✅ Created notification for fan:", fanUser.id);
+
+        const fanClient = clients.get(fanUser.id);
+        if (fanClient && fanClient.readyState === 1) {
+          console.log("🔍 Sending WebSocket notification to fan:", fanUser.id);
+          fanClient.send(JSON.stringify({ type: "notification", data: notification.message }));
+          console.log("✅ WebSocket notification sent to fan:", fanUser.id);
+        } else {
+          console.warn("⚠️ Fan's WebSocket client not available:", fanUser.id);
+        }
+      } else {
+        console.log("🔍 No fan user found for notification");
+      }
+    }
+
     const ownerId = feedType === "design" ? post.shopId : post.clientId;
     const owner = await User.findByPk(ownerId);
     if (owner) {
@@ -195,7 +217,7 @@ router.put("/:commentId", async (req, res) => {
     }
 
     const comment = await Comment.findByPk(commentId, {
-      include: [{ model: Post, as: "Post" }], // Updated alias to "Post"
+      include: [{ model: Post, as: "Post" }],
     });
     if (!comment) {
       return res.status(404).json({ message: "Comment not found" });
@@ -207,12 +229,101 @@ router.put("/:commentId", async (req, res) => {
 
     await comment.update({ 
       content, 
-      price: comment.Post?.feedType === "design" ? parseFloat(price) || 0 : null // Updated to use "Post" alias
+      price: comment.Post?.feedType === "design" ? parseFloat(price) || 0 : null
     });
     console.log("✅ Comment updated:", comment.id);
     res.json({ data: comment });
   } catch (error) {
     console.error("❌ Comment Update Error:", error.message);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// POST /api/comments/:id/withdraw - Withdraw a pitch
+router.post("/:id/withdraw", async (req, res) => {
+  const { Comment, Post } = req.app.get("db");
+  const { id } = req.params;
+
+  try {
+    const comment = await Comment.findByPk(id, {
+      include: [{ model: Post, as: "Post" }],
+    });
+    if (!comment) {
+      return res.status(404).json({ message: "Comment not found" });
+    }
+
+    if (comment.userId !== req.user.id) {
+      return res.status(403).json({ message: "You can only withdraw your own pitch" });
+    }
+
+    if (comment.Post.feedType !== "booking") {
+      return res.status(400).json({ message: "Can only withdraw pitches on booking posts" });
+    }
+
+    if (comment.parentId) {
+      return res.status(400).json({ message: "Can only withdraw top-level pitches" });
+    }
+
+    if (comment.withdrawn) {
+      return res.status(400).json({ message: "Pitch already withdrawn" });
+    }
+
+    if (comment.Post.shopId) {
+      return res.status(400).json({ message: "Cannot withdraw a pitch after a pitch has been accepted" });
+    }
+
+    await comment.update({ withdrawn: true });
+    console.log("✅ Pitch withdrawn:", comment.id);
+    res.json({ message: "Pitch withdrawn successfully" });
+  } catch (error) {
+    console.error("❌ Withdraw Pitch Error:", error.message);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// DELETE /api/comments/:id - Delete a comment (admin-only)
+router.delete("/:id", async (req, res) => {
+  const { Comment } = req.app.get("db");
+  const { id } = req.params;
+
+  try {
+    if (!req.user || req.user.isAdmin !== true) {
+      return res.status(403).json({ message: "Admins only" });
+    }
+
+    const comment = await Comment.findByPk(id);
+    if (!comment) {
+      return res.status(404).json({ message: "Comment not found" });
+    }
+
+    await comment.destroy();
+    console.log("✅ Comment deleted by admin:", req.user.id, "Comment ID:", id);
+    res.json({ message: "Comment deleted successfully" });
+  } catch (error) {
+    console.error("❌ Delete Comment Error:", error.message);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// GET /api/comments - Fetch all comments (admin-only)
+router.get("/", async (req, res) => {
+  const { Comment, User, Post } = req.app.get("db");
+
+  try {
+    if (!req.user || req.user.isAdmin !== true) {
+      return res.status(403).json({ message: "Admins only" });
+    }
+
+    const comments = await Comment.findAll({
+      include: [
+        { model: User, as: "user", attributes: ["id", "username"] },
+        { model: Post, as: "Post", attributes: ["id", "title"], required: false }, // Include Post, allow null if missing
+      ],
+    });
+
+    res.json({ comments });
+  } catch (error) {
+    console.error("❌ Fetch Comments Error:", error.message);
     res.status(500).json({ message: "Server error" });
   }
 });
