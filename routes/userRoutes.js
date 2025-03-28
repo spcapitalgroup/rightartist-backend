@@ -29,6 +29,45 @@ const upload = multer({
   limits: { fileSize: 5 * 1024 * 1024 },
 }).array("images", 5);
 
+// GET /api/users/:userId - Get user details
+router.get("/:userId", async (req, res) => {
+  const { User } = req.app.get("db");
+  const { userId } = req.params;
+
+  try {
+    const user = await User.findByPk(userId, {
+      attributes: [
+        "id",
+        "firstName",
+        "lastName",
+        "username",
+        "email",
+        "userType",
+        "isPaid",
+        "isAdmin",
+        "depositSettings",
+        "calendarIntegrations",
+        "portfolio",
+        "bio",
+        "location",
+        "operatingHours",
+        "socialLinks",
+        "createdAt",
+        "updatedAt",
+      ],
+    });
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    res.json(user);
+  } catch (error) {
+    console.error("Error fetching user:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
 // Get all users (admin-only)
 router.get("/", async (req, res) => {
   const { User } = req.app.get("db");

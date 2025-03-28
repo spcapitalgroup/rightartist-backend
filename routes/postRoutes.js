@@ -1,36 +1,11 @@
 const express = require("express");
 const router = express.Router();
-const multer = require("multer");
+const formidable = require("formidable");
 const path = require("path");
 const sharp = require("sharp");
-const fs = require("fs");
+const fs = require("fs").promises;
 const { v4: uuidv4 } = require("uuid");
 const CalendarIntegrationService = require("../services/CalendarIntegrationService");
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, "uploads");
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, `${uniqueSuffix}${path.extname(file.originalname)}`);
-  },
-});
-
-const upload = multer({
-  storage,
-  fileFilter: (req, file, cb) => {
-    console.log("🔍 Multer received file:", file);
-    const filetypes = /jpeg|jpg|png/;
-    const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
-    const mimetype = filetypes.test(file.mimetype);
-    if (extname && mimetype) {
-      return cb(null, true);
-    }
-    cb(new Error("Only JPEG/JPG/PNG images are allowed"));
-  },
-  limits: { fileSize: 5 * 1024 * 1024 },
-}).array("images", 5);
 
 const addWatermark = async (buffer, outputFilePath) => {
   const watermarkText = "SPCapital \u00A9";
@@ -62,26 +37,71 @@ const addWatermark = async (buffer, outputFilePath) => {
 };
 
 module.exports = (wss) => {
-  router.post("/", upload, async (req, res) => {
-    console.log("🔍 Files received:", req.files);
-    console.log("🔍 Body after multer:", req.body);
+  // GET /api/posts/:postId - Get post details
+  router.get("/:postId", async (req, res) => {
+    const { Post, User, Comment } = req.app.get("db");
+    const { postId } = req.params;
 
-    if (req.files && req.files.length > 0) {
-      console.log("🔍 Applying watermark to uploaded files");
-      try {
-        for (const file of req.files) {
-          const filePath = path.join("uploads", file.filename);
-          const outputFilePath = path.join("uploads", "watermarked-" + file.filename);
-          const buffer = fs.readFileSync(filePath);
-          const watermarkedFilePath = await addWatermark(buffer, outputFilePath);
-          fs.unlinkSync(filePath);
-          file.filename = path.basename(watermarkedFilePath);
-        }
-      } catch (error) {
-        console.error("❌ Watermark Application Error:", error.message);
-        return res.status(500).json({ message: "Error applying watermark", error: error.message });
+    try {
+      const post = await Post.findByPk(postId, {
+        include: [
+          { model: User, as: "user", attributes: ["id", "username"] },
+          { model: User, as: "client", attributes: ["id", "username"] },
+          { model: User, as: "shop", attributes: ["id", "username"] },
+          {
+            model: Comment,
+            as: "comments",
+            include: [
+              { model: User, as: "user", attributes: ["id", "username"] },
+              {
+                model: Comment,
+                as: "replies",
+                include: [{ model: User, as: "user", attributes: ["id", "username"] }],
+              },
+            ],
+          },
+        ],
+      });
+
+      if (!post) {
+        return res.status(404).json({ message: "Post not found" });
       }
+
+      res.json(post);
+    } catch (error) {
+      console.error("Error fetching post:", error);
+      res.status(500).json({ message: "Server error" });
     }
+  });
+
+  // GET /api/posts/user/:userId/design - Get design posts for a user
+  router.get("/user/:userId/design", async (req, res) => {
+    const { Post, User } = req.app.get("db");
+    const { userId } = req.params;
+
+    try {
+      const posts = await Post.findAll({
+        where: {
+          userId,
+          feedType: "design",
+        },
+        include: [
+          { model: User, as: "user", attributes: ["id", "username"] },
+        ],
+        order: [["createdAt", "DESC"]],
+      });
+
+      res.json({ posts });
+    } catch (error) {
+      console.error("Error fetching design posts for user:", error);
+      res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  // POST /api/posts/create - Create a new post (JSON-based)
+  router.post("/create", async (req, res) => {
+    console.log("🔍 Entering /api/posts/create endpoint");
+    console.log("🔍 Request Body:", req.body);
 
     const { Post, User, Notification } = req.app.get("db");
     const { title, description, location, feedType } = req.body;
@@ -122,9 +142,7 @@ module.exports = (wss) => {
         location,
         feedType,
         status: "open",
-        images: req.files ? req.files.map((file) => file.filename) : [],
-        createdAt: new Date(),
-        updatedAt: new Date(),
+        images: [], // No file uploads for now
       };
 
       if (feedType === "design") {
@@ -144,6 +162,7 @@ module.exports = (wss) => {
       console.log("📝 Creating post for user:", user.id, "Data:", postData);
       const newPost = await Post.create(postData);
 
+      // Notify designers - WebSocket optional
       const designers = await User.findAll({ where: { userType: "designer" } });
       const notificationMessage = feedType === "design"
         ? `New design request posted by ${user.username}: "${title}"`
@@ -154,9 +173,6 @@ module.exports = (wss) => {
           id: uuidv4(),
           userId: designer.id,
           message: notificationMessage,
-          isRead: false,
-          createdAt: new Date(),
-          updatedAt: new Date(),
         });
 
         if (wss && wss.clients) {
@@ -177,6 +193,85 @@ module.exports = (wss) => {
       console.error("❌ Post Creation Error:", error.message);
       res.status(500).json({ message: "Server error", error: error.message });
     }
+  });
+
+  // POST /api/posts/upload-images - Upload images for a post
+  router.post("/upload-images", async (req, res) => {
+    console.log("🔍 Entering /api/posts/upload-images endpoint");
+
+    const { Post } = req.app.get("db");
+    const form = new formidable.IncomingForm({
+      uploadDir: path.join(__dirname, "../uploads"),
+      keepExtensions: true,
+      maxFileSize: 5 * 1024 * 1024, // 5MB limit
+      multiples: true,
+      filter: ({ mimetype }) => {
+        const filetypes = /jpeg|jpg|png/;
+        return mimetype && filetypes.test(mimetype);
+      },
+    });
+
+    form.parse(req, async (err, fields, files) => {
+      if (err) {
+        console.error("❌ Formidable Error:", err.message);
+        return res.status(400).json({ message: "Error parsing form data: " + err.message });
+      }
+
+      try {
+        const postId = fields.postId;
+        if (!postId) {
+          return res.status(400).json({ message: "Missing postId" });
+        }
+
+        const post = await Post.findByPk(postId);
+        if (!post) {
+          return res.status(404).json({ message: "Post not found" });
+        }
+
+        if (post.userId !== req.user.id) {
+          return res.status(403).json({ message: "You can only upload images for your own posts" });
+        }
+
+        const images = files.images;
+        if (!images) {
+          return res.status(400).json({ message: "No images provided" });
+        }
+
+        const imageArray = Array.isArray(images) ? images : [images];
+        const uploadedImages = [];
+
+        for (const image of imageArray) {
+          const oldPath = image.filepath;
+          const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+          const newFilename = `${uniqueSuffix}${path.extname(image.originalFilename)}`;
+          const newPath = path.join(__dirname, "../uploads", newFilename);
+          const watermarkedPath = path.join(__dirname, "../uploads", `watermarked-${newFilename}`);
+
+          // Move the file to the uploads directory
+          await fs.rename(oldPath, newPath);
+
+          // Apply watermark
+          const buffer = await fs.readFile(newPath);
+          await addWatermark(buffer, watermarkedPath);
+
+          // Delete the original file
+          await fs.unlink(newPath);
+
+          uploadedImages.push(`watermarked-${newFilename}`);
+        }
+
+        // Update the post with the new images
+        const currentImages = post.images || [];
+        post.images = [...currentImages, ...uploadedImages];
+        await post.save();
+
+        console.log("✅ Images uploaded and watermarked:", uploadedImages);
+        res.status(200).json({ message: "Images uploaded successfully", images: uploadedImages });
+      } catch (error) {
+        console.error("❌ Image Upload Error:", error.message);
+        res.status(500).json({ message: "Server error", error: error.message });
+      }
+    });
   });
 
   router.post("/:id/schedule", async (req, res) => {
@@ -413,6 +508,65 @@ module.exports = (wss) => {
       res.json({ message: "Pitch accepted successfully", post });
     } catch (error) {
       console.error("❌ Accept Pitch Error:", error.message);
+      res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  // PUT /api/posts/:postId/accept - Accept a comment
+  router.put("/:postId/accept", async (req, res) => {
+    const { Post, Comment, User, Notification } = req.app.get("db");
+    const clients = req.app.get("wsClients");
+    const { postId } = req.params;
+    const { commentId } = req.body;
+
+    try {
+      const post = await Post.findByPk(postId);
+      if (!post) {
+        return res.status(404).json({ message: "Post not found" });
+      }
+
+      // Ensure the authenticated user is the shop owner
+      if (req.user.id !== post.shopId) {
+        return res.status(403).json({ message: "Unauthorized" });
+      }
+
+      const comment = await Comment.findByPk(commentId);
+      if (!comment || comment.postId !== postId) {
+        return res.status(404).json({ message: "Comment not found" });
+      }
+
+      if (comment.withdrawn) {
+        return res.status(400).json({ message: "Cannot accept a withdrawn comment" });
+      }
+
+      post.status = "accepted";
+      await post.save();
+
+      const user = await User.findByPk(comment.userId);
+      if (!user) {
+        return res.status(404).json({ message: "Comment author not found" });
+      }
+
+      const notification = {
+        id: uuidv4(),
+        userId: comment.userId,
+        message: `Your comment on "${post.title}" has been accepted by ${req.user.firstName} ${req.user.lastName}.`,
+        isRead: false,
+        createdAt: new Date(),
+      };
+      await Notification.create(notification);
+
+      const client = clients.get(comment.userId);
+      if (client && client.readyState === 1) {
+        client.send(JSON.stringify({ type: "notification", data: notification.message }));
+        console.log("✅ WebSocket notification sent for comment acceptance");
+      } else {
+        console.warn("⚠️ User's WebSocket client not available:", comment.userId);
+      }
+
+      res.json(post);
+    } catch (error) {
+      console.error("Error accepting comment:", error);
       res.status(500).json({ message: "Server error" });
     }
   });
