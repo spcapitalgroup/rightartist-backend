@@ -12,7 +12,7 @@ const storage = multer.diskStorage({
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, `${uniqueSuffix}${path.extname(file.originalname)}`);
+    cb(null, `${uniqueSuffix}${path.extname(file.originalName || file.originalname)}`);
   },
 });
 
@@ -21,7 +21,7 @@ const upload = multer({
   fileFilter: (req, file, cb) => {
     console.log("🔍 Multer received file:", file);
     const filetypes = /jpeg|jpg|png/;
-    const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
+    const extname = filetypes.test(path.extname(file.originalName || file.originalname).toLowerCase());
     const mimetype = filetypes.test(file.mimetype);
     if (extname && mimetype) {
       return cb(null, true);
@@ -33,25 +33,14 @@ const upload = multer({
 
 const addWatermark = async (buffer, outputFilePath) => {
   const watermarkText = "SPCapital \u00A9";
-
   try {
     const { width, height } = await sharp(buffer).metadata();
-
     const watermarkSVG = `<svg width="${width / 2}" height="${height / 10}">
       <text x="10" y="${height / 15}" font-family="Arial" font-size="30" fill="black">${watermarkText}</text>
     </svg>`;
-
     await sharp(buffer)
-      .composite([
-        {
-          input: Buffer.from(watermarkSVG),
-          gravity: "centre",
-          top: 20,
-          left: 10,
-        },
-      ])
+      .composite([{ input: Buffer.from(watermarkSVG), gravity: "centre", top: 20, left: 10 }])
       .toFile(outputFilePath);
-
     console.log("✅ Watermark added to:", outputFilePath);
     return outputFilePath;
   } catch (error) {
@@ -60,16 +49,16 @@ const addWatermark = async (buffer, outputFilePath) => {
   }
 };
 
-router.post("/:postId", upload, async (req, res) => {
+// POST /api/comments - Create a new comment
+router.post("/", upload, async (req, res) => {
   const { Post, User, Comment, Notification } = req.app.get("db");
   const clients = req.app.get("wsClients");
-  const { content, parentId, price, estimatedDuration, availability } = req.body;
-  const { postId } = req.params;
+  const { content, postId, parentId, price, estimatedDuration, availability } = req.body;
 
   try {
     console.log("🔍 Starting comment creation for post:", postId);
-    if (!content) {
-      return res.status(400).json({ message: "Content is required" });
+    if (!content || !postId) {
+      return res.status(400).json({ message: "Content and postId are required" });
     }
 
     const user = await User.findByPk(req.user.id);
@@ -116,7 +105,7 @@ router.post("/:postId", upload, async (req, res) => {
     }
 
     let imageFilenames = [];
-    if (req.files && req.files.length > 0) {
+    if (req.files && Array.isArray(req.files) && req.files.length > 0) {
       if (userType !== "designer" || feedType !== "design") {
         return res.status(403).json({ message: "Only designers can upload images in design feed comments" });
       }
@@ -125,9 +114,9 @@ router.post("/:postId", upload, async (req, res) => {
         for (const file of req.files) {
           const filePath = path.join("uploads", file.filename);
           const outputFilePath = path.join("uploads", "watermarked-" + file.filename);
-          const buffer = fs.readFileSync(filePath);
+          const buffer = await fs.readFileSync(filePath);
           const watermarkedFilePath = await addWatermark(buffer, outputFilePath);
-          fs.unlinkSync(filePath);
+          await fs.unlinkSync(filePath);
           imageFilenames.push(path.basename(watermarkedFilePath));
         }
       } catch (error) {
@@ -137,7 +126,7 @@ router.post("/:postId", upload, async (req, res) => {
     }
 
     const comment = await Comment.create({
-      id: require("uuid").v4(),
+      id: uuidv4(),
       content,
       userId: user.id,
       postId,
@@ -181,7 +170,7 @@ router.post("/:postId", upload, async (req, res) => {
     if (owner) {
       const notificationMessage = `New comment on your ${feedType} post "${post.title}" by ${user.username}`;
       const notification = await Notification.create({
-        id: require("uuid").v4(),
+        id: uuidv4(),
         userId: ownerId,
         message: notificationMessage,
       });
@@ -206,6 +195,38 @@ router.post("/:postId", upload, async (req, res) => {
   }
 });
 
+// GET /api/comments/post/:postId - Fetch comments for a post
+router.get("/post/:postId", async (req, res) => {
+  const { Comment, User, Post } = req.app.get("db");
+  const { postId } = req.params;
+
+  try {
+    const post = await Post.findByPk(postId);
+    if (!post) {
+      return res.status(404).json({ message: "Post not found" });
+    }
+
+    const comments = await Comment.findAll({
+      where: { postId },
+      include: [
+        { model: User, as: "user", attributes: ["id", "username"] },
+        {
+          model: Comment,
+          as: "replies",
+          include: [{ model: User, as: "user", attributes: ["id", "username"] }],
+        },
+      ],
+      order: [["createdAt", "ASC"]],
+    });
+
+    res.json({ comments });
+  } catch (error) {
+    console.error("❌ Fetch Comments Error:", error.message);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// PUT /api/comments/:commentId - Update a comment
 router.put("/:commentId", async (req, res) => {
   const { Comment, Post } = req.app.get("db");
   const { content, price } = req.body;
@@ -227,9 +248,9 @@ router.put("/:commentId", async (req, res) => {
       return res.status(403).json({ message: "You can only edit your own comments" });
     }
 
-    await comment.update({ 
-      content, 
-      price: comment.Post?.feedType === "design" ? parseFloat(price) || 0 : null
+    await comment.update({
+      content,
+      price: comment.Post?.feedType === "design" ? parseFloat(price) || 0 : null,
     });
     console.log("✅ Comment updated:", comment.id);
     res.json({ data: comment });
@@ -317,7 +338,7 @@ router.get("/", async (req, res) => {
     const comments = await Comment.findAll({
       include: [
         { model: User, as: "user", attributes: ["id", "username"] },
-        { model: Post, as: "Post", attributes: ["id", "title"], required: false }, // Include Post, allow null if missing
+        { model: Post, as: "Post", attributes: ["id", "title"], required: false },
       ],
     });
 

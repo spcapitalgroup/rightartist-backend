@@ -5,6 +5,7 @@ const { Sequelize, Op } = require("sequelize");
 const WebSocket = require("ws");
 const path = require("path");
 const fs = require("fs");
+const multer = require("multer");
 require("dotenv").config();
 
 const app = express();
@@ -17,28 +18,32 @@ app.use((req, res, next) => {
   next();
 });
 
-// Serve static files with debug logging using an absolute path
+// Ensure uploads directory exists
 const uploadsPath = path.join(__dirname, "uploads");
-console.log(`🔍 Serving static files from: ${uploadsPath}`);
+if (!fs.existsSync(uploadsPath)) {
+  fs.mkdirSync(uploadsPath, { recursive: true });
+  console.log(`✅ Created uploads directory: ${uploadsPath}`);
+}
 
-// Check if specific files exist at startup
-const checkFiles = [
-  "watermarked-1743018265146-857098774.png",
-  "watermarked-1743006915476-164745314.png",
-];
-checkFiles.forEach((file) => {
-  const filePath = path.join(uploadsPath, file);
-  if (fs.existsSync(filePath)) {
-    console.log(`✅ File exists at startup: ${filePath}`);
-  } else {
-    console.log(`❌ File does not exist at startup: ${filePath}`);
-  }
+// Configure Multer for file uploads (used in postRoutes.js)
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadsPath);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+    cb(null, `${uniqueSuffix}-${file.originalname}`);
+  },
 });
+const upload = multer({ storage });
 
+// Serve static files from uploads directory
+console.log(`🔍 Serving static files from: ${uploadsPath}`);
 app.use(
+  "/uploads",
   express.static(uploadsPath, {
-    setHeaders: (res, path, stat) => {
-      console.log(`🔍 Serving static file: ${path}`);
+    setHeaders: (res, filePath) => {
+      console.log(`🔍 Serving static file: ${filePath}`);
     },
     fallthrough: true,
   })
@@ -59,9 +64,7 @@ app.use(express.json());
 // Sequelize setup
 const sequelize = new Sequelize(
   process.env.DATABASE_URL || "sqlite:./database.sqlite",
-  {
-    logging: false,
-  }
+  { logging: false }
 );
 
 // Models
@@ -88,11 +91,11 @@ const User = sequelize.define("User", {
     defaultValue: { required: false, amount: 0 },
   },
   calendarIntegrations: { type: Sequelize.JSON, defaultValue: {} },
-  portfolio: { type: Sequelize.JSON, defaultValue: [] }, // Array of { imageUrl, style, date, description }
-  bio: { type: Sequelize.TEXT, defaultValue: "" }, // Short bio
-  location: { type: Sequelize.STRING, defaultValue: "" }, // Shop location
-  operatingHours: { type: Sequelize.JSON, defaultValue: {} }, // { "monday": "9am-5pm", ... }
-  socialLinks: { type: Sequelize.JSON, defaultValue: {} }, // { "instagram": "url", ... }
+  portfolio: { type: Sequelize.JSON, defaultValue: [] },
+  bio: { type: Sequelize.TEXT, defaultValue: "" },
+  location: { type: Sequelize.STRING, defaultValue: "" },
+  operatingHours: { type: Sequelize.JSON, defaultValue: {} },
+  socialLinks: { type: Sequelize.JSON, defaultValue: {} },
   createdAt: { type: Sequelize.DATE, defaultValue: Sequelize.NOW },
   updatedAt: { type: Sequelize.DATE, defaultValue: Sequelize.NOW },
 });
@@ -134,9 +137,9 @@ const Comment = sequelize.define("Comment", {
   postId: { type: Sequelize.UUID, allowNull: false },
   parentId: { type: Sequelize.UUID, allowNull: true },
   price: { type: Sequelize.FLOAT, allowNull: true },
-  estimatedDuration: { type: Sequelize.STRING, allowNull: true }, // e.g., "2 hours"
-  availability: { type: Sequelize.STRING, allowNull: true }, // e.g., "Next week"
-  withdrawn: { type: Sequelize.BOOLEAN, defaultValue: false }, // For pitch withdrawal
+  estimatedDuration: { type: Sequelize.STRING, allowNull: true },
+  availability: { type: Sequelize.STRING, allowNull: true },
+  withdrawn: { type: Sequelize.BOOLEAN, defaultValue: false },
   images: { type: Sequelize.JSON, defaultValue: [] },
   createdAt: { type: Sequelize.DATE, defaultValue: Sequelize.NOW },
   updatedAt: { type: Sequelize.DATE, defaultValue: Sequelize.NOW },
@@ -207,11 +210,11 @@ const Payment = sequelize.define("Payment", {
 
 const Review = sequelize.define("Review", {
   id: { type: Sequelize.UUID, defaultValue: Sequelize.UUIDV4, primaryKey: true },
-  userId: { type: Sequelize.UUID, allowNull: false }, // Reviewer
-  targetUserId: { type: Sequelize.UUID, allowNull: false }, // Designer/Shop being reviewed
-  rating: { type: Sequelize.INTEGER, allowNull: false }, // 1-5 stars
+  userId: { type: Sequelize.UUID, allowNull: false },
+  targetUserId: { type: Sequelize.UUID, allowNull: false },
+  rating: { type: Sequelize.INTEGER, allowNull: false },
   comment: { type: Sequelize.TEXT, allowNull: true },
-  bookingId: { type: Sequelize.UUID, allowNull: false }, // Reference to the booking
+  bookingId: { type: Sequelize.UUID, allowNull: false },
   createdAt: { type: Sequelize.DATE, defaultValue: Sequelize.NOW },
   updatedAt: { type: Sequelize.DATE, defaultValue: Sequelize.NOW },
 });
@@ -224,10 +227,7 @@ const Rating = sequelize.define("Rating", {
   rating: {
     type: Sequelize.INTEGER,
     allowNull: false,
-    validate: {
-      min: 1,
-      max: 5,
-    },
+    validate: { min: 1, max: 5 },
   },
   comment: { type: Sequelize.TEXT, allowNull: true, defaultValue: "" },
   createdAt: { type: Sequelize.DATE, defaultValue: Sequelize.NOW },
@@ -245,7 +245,7 @@ const Booking = sequelize.define("Booking", {
     defaultValue: "scheduled",
     allowNull: false,
   },
-  contactInfo: { type: Sequelize.JSON, defaultValue: {} }, // { phone, email }
+  contactInfo: { type: Sequelize.JSON, defaultValue: {} },
   createdAt: { type: Sequelize.DATE, defaultValue: Sequelize.NOW },
   updatedAt: { type: Sequelize.DATE, defaultValue: Sequelize.NOW },
 });
@@ -253,52 +253,40 @@ const Booking = sequelize.define("Booking", {
 // Associations
 User.hasMany(Post, { foreignKey: "userId" });
 Post.belongsTo(User, { foreignKey: "userId", as: "user" });
-
-// Add associations for shopId and clientId directly on Post
 Post.belongsTo(User, { foreignKey: "shopId", as: "shop" });
 Post.belongsTo(User, { foreignKey: "clientId", as: "client" });
 User.hasMany(Post, { foreignKey: "shopId", as: "shopPosts" });
 User.hasMany(Post, { foreignKey: "clientId", as: "clientPosts" });
-
 Post.hasMany(Comment, { foreignKey: "postId", as: "comments" });
 Comment.belongsTo(Post, { foreignKey: "postId", as: "Post" });
-
 User.hasMany(Comment, { foreignKey: "userId" });
 Comment.belongsTo(User, { foreignKey: "userId", as: "user" });
-
 Comment.hasMany(Comment, { foreignKey: "parentId", as: "replies" });
 Comment.belongsTo(Comment, { foreignKey: "parentId", as: "parent" });
-
 User.hasMany(Message, { foreignKey: "senderId", as: "sentMessages" });
 User.hasMany(Message, { foreignKey: "receiverId", as: "receivedMessages" });
 Message.belongsTo(User, { foreignKey: "senderId", as: "sender" });
 Message.belongsTo(User, { foreignKey: "receiverId", as: "receiver" });
 Message.belongsTo(Design, { foreignKey: "designId", as: "design" });
-
 Design.belongsTo(User, { foreignKey: "designerId", as: "designer" });
 Design.belongsTo(User, { foreignKey: "shopId", as: "shop" });
 Design.belongsTo(Post, { foreignKey: "postId", as: "Post" });
 Design.belongsTo(Comment, { foreignKey: "commentId" });
-
 User.hasMany(Notification, { foreignKey: "userId" });
 Notification.belongsTo(User, { foreignKey: "userId", as: "user" });
-
 User.hasMany(Payment, { foreignKey: "userId" });
 Payment.belongsTo(User, { foreignKey: "userId" });
-
-User.hasMany(Review, { foreignKey: "userId", as: "reviewsGiven" }); // Reviewer
-User.hasMany(Review, { foreignKey: "targetUserId", as: "reviewsReceived" }); // Designer/Shop
-Review.belongsTo(User, { foreignKey: "userId", as: "user" }); // Reviewer
-Review.belongsTo(User, { foreignKey: "targetUserId", as: "targetUser" }); // Designer/Shop
+User.hasMany(Review, { foreignKey: "userId", as: "reviewsGiven" });
+User.hasMany(Review, { foreignKey: "targetUserId", as: "reviewsReceived" });
+Review.belongsTo(User, { foreignKey: "userId", as: "user" });
+Review.belongsTo(User, { foreignKey: "targetUserId", as: "targetUser" });
 Review.belongsTo(Post, { foreignKey: "bookingId", as: "booking" });
-
-User.hasMany(Rating, { foreignKey: "raterId", as: "ratingsGiven" }); // Rater
-User.hasMany(Rating, { foreignKey: "rateeId", as: "ratingsReceived" }); // Ratee
+User.hasMany(Rating, { foreignKey: "raterId", as: "ratingsGiven" });
+User.hasMany(Rating, { foreignKey: "rateeId", as: "ratingsReceived" });
 Rating.belongsTo(User, { foreignKey: "raterId", as: "rater" });
 Rating.belongsTo(User, { foreignKey: "rateeId", as: "ratee" });
 Post.hasMany(Rating, { foreignKey: "postId", as: "ratings" });
 Rating.belongsTo(Post, { foreignKey: "postId", as: "post" });
-
 Booking.belongsTo(Post, { foreignKey: "postId", as: "post" });
 Booking.belongsTo(User, { foreignKey: "shopId", as: "shop" });
 Booking.belongsTo(User, { foreignKey: "clientId", as: "client" });
@@ -341,7 +329,7 @@ wss.on("connection", (ws) => {
 });
 
 // Set Sequelize instance in app
-app.set("db", {
+const db = {
   User,
   Post,
   Comment,
@@ -354,7 +342,8 @@ app.set("db", {
   Booking,
   sequelize,
   Op,
-});
+};
+app.set("db", db);
 
 // Routes
 const authRoutes = require("./routes/authRoutes");
@@ -370,14 +359,12 @@ const shopRoutes = require("./routes/shopRoutes");
 const ratingRoutes = require("./routes/ratingRoutes");
 const bookingRoutes = require("./routes/bookingRoutes");
 
-console.log(
-  "🔍 Mounting authRoutes for /api/auth/login, /api/auth/signup, /api/auth/me, etc."
-);
+console.log("🔍 Mounting authRoutes for /api/auth/login, /api/auth/signup, /api/auth/me, etc.");
 app.use("/api/auth", authRoutes);
 console.log("🔍 Mounting feedRoutes for /api/feed/");
 app.use("/api/feed", authenticateUser, feedRoutes);
 console.log("🔍 Mounting postRoutes for /api/posts");
-app.use("/api/posts", authenticateUser, postRoutes(wss));
+app.use("/api/posts", authenticateUser, postRoutes(wss, db)); // Pass full db object
 console.log("🔍 Mounting commentRoutes for /api/comments");
 app.use("/api/comments", authenticateUser, commentRoutes);
 console.log("🔍 Mounting messageRoutes for /api/messages");
@@ -407,13 +394,9 @@ app.listen(port, async () => {
     // Add notifications column to Users if it doesn't exist
     console.log("🔍 Checking for notifications column in Users table...");
     const [results] = await sequelize.query("PRAGMA table_info(Users);");
-    const hasNotificationsColumn = results.some(
-      (column) => column.name === "notifications"
-    );
+    const hasNotificationsColumn = results.some((column) => column.name === "notifications");
     if (!hasNotificationsColumn) {
-      await sequelize.query(
-        'ALTER TABLE Users ADD COLUMN notifications JSON DEFAULT "[]";'
-      );
+      await sequelize.query('ALTER TABLE Users ADD COLUMN notifications JSON DEFAULT "[]";');
       console.log("✅ Added notifications column to Users table");
     } else {
       console.log("ℹ️ Notifications column already exists in Users table");
@@ -421,13 +404,9 @@ app.listen(port, async () => {
 
     // Add depositSettings column to Users if it doesn't exist
     console.log("🔍 Checking for depositSettings column in Users table...");
-    const hasDepositSettingsColumn = results.some(
-      (column) => column.name === "depositSettings"
-    );
+    const hasDepositSettingsColumn = results.some((column) => column.name === "depositSettings");
     if (!hasDepositSettingsColumn) {
-      await sequelize.query(
-        'ALTER TABLE Users ADD COLUMN depositSettings JSON DEFAULT \'{"required": false, "amount": 0}\';'
-      );
+      await sequelize.query('ALTER TABLE Users ADD COLUMN depositSettings JSON DEFAULT \'{"required": false, "amount": 0}\';');
       console.log("✅ Added depositSettings column to Users table");
     } else {
       console.log("ℹ️ depositSettings column already exists in Users table");
@@ -435,29 +414,19 @@ app.listen(port, async () => {
 
     // Add calendarIntegrations column to Users if it doesn't exist
     console.log("🔍 Checking for calendarIntegrations column in Users table...");
-    const hasCalendarIntegrationsColumn = results.some(
-      (column) => column.name === "calendarIntegrations"
-    );
+    const hasCalendarIntegrationsColumn = results.some((column) => column.name === "calendarIntegrations");
     if (!hasCalendarIntegrationsColumn) {
-      await sequelize.query(
-        'ALTER TABLE Users ADD COLUMN calendarIntegrations JSON DEFAULT "{}";'
-      );
+      await sequelize.query('ALTER TABLE Users ADD COLUMN calendarIntegrations JSON DEFAULT "{}";');
       console.log("✅ Added calendarIntegrations column to Users table");
     } else {
-      console.log(
-        "ℹ️ calendarIntegrations column already exists in Users table"
-      );
+      console.log("ℹ️ calendarIntegrations column already exists in Users table");
     }
 
     // Add portfolio column to Users if it doesn't exist
     console.log("🔍 Checking for portfolio column in Users table...");
-    const hasPortfolioColumn = results.some(
-      (column) => column.name === "portfolio"
-    );
+    const hasPortfolioColumn = results.some((column) => column.name === "portfolio");
     if (!hasPortfolioColumn) {
-      await sequelize.query(
-        'ALTER TABLE Users ADD COLUMN portfolio JSON DEFAULT "[]";'
-      );
+      await sequelize.query('ALTER TABLE Users ADD COLUMN portfolio JSON DEFAULT "[]";');
       console.log("✅ Added portfolio column to Users table");
     } else {
       console.log("ℹ️ portfolio column already exists in Users table");
@@ -475,13 +444,9 @@ app.listen(port, async () => {
 
     // Add location column to Users if it doesn't exist
     console.log("🔍 Checking for location column in Users table...");
-    const hasLocationColumn = results.some(
-      (column) => column.name === "location"
-    );
+    const hasLocationColumn = results.some((column) => column.name === "location");
     if (!hasLocationColumn) {
-      await sequelize.query(
-        'ALTER TABLE Users ADD COLUMN location STRING DEFAULT "";'
-      );
+      await sequelize.query('ALTER TABLE Users ADD COLUMN location STRING DEFAULT "";');
       console.log("✅ Added location column to Users table");
     } else {
       console.log("ℹ️ location column already exists in Users table");
@@ -489,13 +454,9 @@ app.listen(port, async () => {
 
     // Add operatingHours column to Users if it doesn't exist
     console.log("🔍 Checking for operatingHours column in Users table...");
-    const hasOperatingHoursColumn = results.some(
-      (column) => column.name === "operatingHours"
-    );
+    const hasOperatingHoursColumn = results.some((column) => column.name === "operatingHours");
     if (!hasOperatingHoursColumn) {
-      await sequelize.query(
-        'ALTER TABLE Users ADD COLUMN operatingHours JSON DEFAULT "{}";'
-      );
+      await sequelize.query('ALTER TABLE Users ADD COLUMN operatingHours JSON DEFAULT "{}";');
       console.log("✅ Added operatingHours column to Users table");
     } else {
       console.log("ℹ️ operatingHours column already exists in Users table");
@@ -503,13 +464,9 @@ app.listen(port, async () => {
 
     // Add socialLinks column to Users if it doesn't exist
     console.log("🔍 Checking for socialLinks column in Users table...");
-    const hasSocialLinksColumn = results.some(
-      (column) => column.name === "socialLinks"
-    );
+    const hasSocialLinksColumn = results.some((column) => column.name === "socialLinks");
     if (!hasSocialLinksColumn) {
-      await sequelize.query(
-        'ALTER TABLE Users ADD COLUMN socialLinks JSON DEFAULT "{}";'
-      );
+      await sequelize.query('ALTER TABLE Users ADD COLUMN socialLinks JSON DEFAULT "{}";');
       console.log("✅ Added socialLinks column to Users table");
     } else {
       console.log("ℹ️ socialLinks column already exists in Users table");
@@ -518,9 +475,7 @@ app.listen(port, async () => {
     // Add images column to Posts if it doesn't exist
     console.log("🔍 Checking for images column in Posts table...");
     const [postResults] = await sequelize.query("PRAGMA table_info(Posts);");
-    const hasImagesColumn = postResults.some(
-      (column) => column.name === "images"
-    );
+    const hasImagesColumn = postResults.some((column) => column.name === "images");
     if (!hasImagesColumn) {
       await sequelize.query('ALTER TABLE Posts ADD COLUMN images JSON DEFAULT "[]";');
       console.log("✅ Added images column to Posts table");
@@ -530,9 +485,7 @@ app.listen(port, async () => {
 
     // Add clientId column to Posts if it doesn't exist
     console.log("🔍 Checking for clientId column in Posts table...");
-    const hasClientIdColumn = postResults.some(
-      (column) => column.name === "clientId"
-    );
+    const hasClientIdColumn = postResults.some((column) => column.name === "clientId");
     if (!hasClientIdColumn) {
       await sequelize.query("ALTER TABLE Posts ADD COLUMN clientId UUID;");
       console.log("✅ Added clientId column to Posts table");
@@ -542,9 +495,7 @@ app.listen(port, async () => {
 
     // Add shopId column to Posts if it doesn't exist
     console.log("🔍 Checking for shopId column in Posts table...");
-    const hasShopIdColumn = postResults.some(
-      (column) => column.name === "shopId"
-    );
+    const hasShopIdColumn = postResults.some((column) => column.name === "shopId");
     if (!hasShopIdColumn) {
       await sequelize.query("ALTER TABLE Posts ADD COLUMN shopId UUID;");
       console.log("✅ Added shopId column to Posts table");
@@ -554,9 +505,7 @@ app.listen(port, async () => {
 
     // Add artistId column to Posts if it doesn't exist
     console.log("🔍 Checking for artistId column in Posts table...");
-    const hasArtistIdColumn = postResults.some(
-      (column) => column.name === "artistId"
-    );
+    const hasArtistIdColumn = postResults.some((column) => column.name === "artistId");
     if (!hasArtistIdColumn) {
       await sequelize.query("ALTER TABLE Posts ADD COLUMN artistId UUID;");
       console.log("✅ Added artistId column to Posts table");
@@ -566,13 +515,9 @@ app.listen(port, async () => {
 
     // Add status column to Posts if it doesn't exist
     console.log("🔍 Checking for status column in Posts table...");
-    const hasStatusColumn = postResults.some(
-      (column) => column.name === "status"
-    );
+    const hasStatusColumn = postResults.some((column) => column.name === "status");
     if (!hasStatusColumn) {
-      await sequelize.query(
-        'ALTER TABLE Posts ADD COLUMN status STRING DEFAULT "open";'
-      );
+      await sequelize.query('ALTER TABLE Posts ADD COLUMN status STRING DEFAULT "open";');
       console.log("✅ Added status column to Posts table");
     } else {
       console.log("ℹ️ status column already exists in Posts table");
@@ -580,9 +525,7 @@ app.listen(port, async () => {
 
     // Add scheduledDate column to Posts if it doesn't exist
     console.log("🔍 Checking for scheduledDate column in Posts table...");
-    const hasScheduledDateColumn = postResults.some(
-      (column) => column.name === "scheduledDate"
-    );
+    const hasScheduledDateColumn = postResults.some((column) => column.name === "scheduledDate");
     if (!hasScheduledDateColumn) {
       await sequelize.query("ALTER TABLE Posts ADD COLUMN scheduledDate DATE;");
       console.log("✅ Added scheduledDate column to Posts table");
@@ -592,13 +535,9 @@ app.listen(port, async () => {
 
     // Add contactInfo column to Posts if it doesn't exist
     console.log("🔍 Checking for contactInfo column in Posts table...");
-    const hasContactInfoColumn = postResults.some(
-      (column) => column.name === "contactInfo"
-    );
+    const hasContactInfoColumn = postResults.some((column) => column.name === "contactInfo");
     if (!hasContactInfoColumn) {
-      await sequelize.query(
-        'ALTER TABLE Posts ADD COLUMN contactInfo JSON DEFAULT "{}";'
-      );
+      await sequelize.query('ALTER TABLE Posts ADD COLUMN contactInfo JSON DEFAULT "{}";');
       console.log("✅ Added contactInfo column to Posts table");
     } else {
       console.log("ℹ️ contactInfo column already exists in Posts table");
@@ -606,9 +545,7 @@ app.listen(port, async () => {
 
     // Add depositAmount column to Posts if it doesn't exist
     console.log("🔍 Checking for depositAmount column in Posts table...");
-    const hasDepositAmountColumn = postResults.some(
-      (column) => column.name === "depositAmount"
-    );
+    const hasDepositAmountColumn = postResults.some((column) => column.name === "depositAmount");
     if (!hasDepositAmountColumn) {
       await sequelize.query("ALTER TABLE Posts ADD COLUMN depositAmount FLOAT;");
       console.log("✅ Added depositAmount column to Posts table");
@@ -618,13 +555,9 @@ app.listen(port, async () => {
 
     // Add depositStatus column to Posts if it doesn't exist
     console.log("🔍 Checking for depositStatus column in Posts table...");
-    const hasDepositStatusColumn = postResults.some(
-      (column) => column.name === "depositStatus"
-    );
+    const hasDepositStatusColumn = postResults.some((column) => column.name === "depositStatus");
     if (!hasDepositStatusColumn) {
-      await sequelize.query(
-        'ALTER TABLE Posts ADD COLUMN depositStatus STRING DEFAULT "pending";'
-      );
+      await sequelize.query('ALTER TABLE Posts ADD COLUMN depositStatus STRING DEFAULT "pending";');
       console.log("✅ Added depositStatus column to Posts table");
     } else {
       console.log("ℹ️ depositStatus column already exists in Posts table");
@@ -632,13 +565,9 @@ app.listen(port, async () => {
 
     // Add externalEventIds column to Posts if it doesn't exist
     console.log("🔍 Checking for externalEventIds column in Posts table...");
-    const hasExternalEventIdsColumn = postResults.some(
-      (column) => column.name === "externalEventIds"
-    );
+    const hasExternalEventIdsColumn = postResults.some((column) => column.name === "externalEventIds");
     if (!hasExternalEventIdsColumn) {
-      await sequelize.query(
-        'ALTER TABLE Posts ADD COLUMN externalEventIds JSON DEFAULT "{}";'
-      );
+      await sequelize.query('ALTER TABLE Posts ADD COLUMN externalEventIds JSON DEFAULT "{}";');
       console.log("✅ Added externalEventIds column to Posts table");
     } else {
       console.log("ℹ️ externalEventIds column already exists in Posts table");
@@ -646,12 +575,8 @@ app.listen(port, async () => {
 
     // Add parentId column to Comments if it doesn't exist
     console.log("🔍 Checking for parentId column in Comments table...");
-    const [commentResults] = await sequelize.query(
-      "PRAGMA table_info(Comments);"
-    );
-    const hasParentIdColumn = commentResults.some(
-      (column) => column.name === "parentId"
-    );
+    const [commentResults] = await sequelize.query("PRAGMA table_info(Comments);");
+    const hasParentIdColumn = commentResults.some((column) => column.name === "parentId");
     if (!hasParentIdColumn) {
       await sequelize.query("ALTER TABLE Comments ADD COLUMN parentId UUID;");
       console.log("✅ Added parentId column to Comments table");
@@ -661,9 +586,7 @@ app.listen(port, async () => {
 
     // Add price column to Comments if it doesn't exist
     console.log("🔍 Checking for price column in Comments table...");
-    const hasPriceColumn = commentResults.some(
-      (column) => column.name === "price"
-    );
+    const hasPriceColumn = commentResults.some((column) => column.name === "price");
     if (!hasPriceColumn) {
       await sequelize.query("ALTER TABLE Comments ADD COLUMN price FLOAT;");
       console.log("✅ Added price column to Comments table");
@@ -673,13 +596,9 @@ app.listen(port, async () => {
 
     // Add estimatedDuration column to Comments if it doesn't exist
     console.log("🔍 Checking for estimatedDuration column in Comments table...");
-    const hasEstimatedDurationColumn = commentResults.some(
-      (column) => column.name === "estimatedDuration"
-    );
+    const hasEstimatedDurationColumn = commentResults.some((column) => column.name === "estimatedDuration");
     if (!hasEstimatedDurationColumn) {
-      await sequelize.query(
-        "ALTER TABLE Comments ADD COLUMN estimatedDuration STRING;"
-      );
+      await sequelize.query("ALTER TABLE Comments ADD COLUMN estimatedDuration STRING;");
       console.log("✅ Added estimatedDuration column to Comments table");
     } else {
       console.log("ℹ️ estimatedDuration column already exists in Comments table");
@@ -687,13 +606,9 @@ app.listen(port, async () => {
 
     // Add availability column to Comments if it doesn't exist
     console.log("🔍 Checking for availability column in Comments table...");
-    const hasAvailabilityColumn = commentResults.some(
-      (column) => column.name === "availability"
-    );
+    const hasAvailabilityColumn = commentResults.some((column) => column.name === "availability");
     if (!hasAvailabilityColumn) {
-      await sequelize.query(
-        "ALTER TABLE Comments ADD COLUMN availability STRING;"
-      );
+      await sequelize.query("ALTER TABLE Comments ADD COLUMN availability STRING;");
       console.log("✅ Added availability column to Comments table");
     } else {
       console.log("ℹ️ availability column already exists in Comments table");
@@ -701,13 +616,9 @@ app.listen(port, async () => {
 
     // Add withdrawn column to Comments if it doesn't exist
     console.log("🔍 Checking for withdrawn column in Comments table...");
-    const hasWithdrawnColumn = commentResults.some(
-      (column) => column.name === "withdrawn"
-    );
+    const hasWithdrawnColumn = commentResults.some((column) => column.name === "withdrawn");
     if (!hasWithdrawnColumn) {
-      await sequelize.query(
-        "ALTER TABLE Comments ADD COLUMN withdrawn BOOLEAN DEFAULT false;"
-      );
+      await sequelize.query("ALTER TABLE Comments ADD COLUMN withdrawn BOOLEAN DEFAULT false;");
       console.log("✅ Added withdrawn column to Comments table");
     } else {
       console.log("ℹ️ withdrawn column already exists in Comments table");
@@ -715,13 +626,9 @@ app.listen(port, async () => {
 
     // Add images column to Comments if it doesn't exist
     console.log("🔍 Checking for images column in Comments table...");
-    const hasCommentImagesColumn = commentResults.some(
-      (column) => column.name === "images"
-    );
+    const hasCommentImagesColumn = commentResults.some((column) => column.name === "images");
     if (!hasCommentImagesColumn) {
-      await sequelize.query(
-        'ALTER TABLE Comments ADD COLUMN images JSON DEFAULT "[]";'
-      );
+      await sequelize.query('ALTER TABLE Comments ADD COLUMN images JSON DEFAULT "[]";');
       console.log("✅ Added images column to Comments table");
     } else {
       console.log("ℹ️ images column already exists in Comments table");
@@ -729,16 +636,10 @@ app.listen(port, async () => {
 
     // Add images column to Messages if it doesn't exist
     console.log("🔍 Checking for images column in Messages table...");
-    const [messageResults] = await sequelize.query(
-      "PRAGMA table_info(Messages);"
-    );
-    const hasMessageImagesColumn = messageResults.some(
-      (column) => column.name === "images"
-    );
+    const [messageResults] = await sequelize.query("PRAGMA table_info(Messages);");
+    const hasMessageImagesColumn = messageResults.some((column) => column.name === "images");
     if (!hasMessageImagesColumn) {
-      await sequelize.query(
-        'ALTER TABLE Messages ADD COLUMN images JSON DEFAULT "[]";'
-      );
+      await sequelize.query('ALTER TABLE Messages ADD COLUMN images JSON DEFAULT "[]";');
       console.log("✅ Added images column to Messages table");
     } else {
       console.log("ℹ️ images column already exists in Messages table");
@@ -746,9 +647,7 @@ app.listen(port, async () => {
 
     // Add designId column to Messages if it doesn't exist
     console.log("🔍 Checking for designId column in Messages table...");
-    const hasDesignIdColumn = messageResults.some(
-      (column) => column.name === "designId"
-    );
+    const hasDesignIdColumn = messageResults.some((column) => column.name === "designId");
     if (!hasDesignIdColumn) {
       await sequelize.query("ALTER TABLE Messages ADD COLUMN designId UUID;");
       console.log("✅ Added designId column to Messages table");
@@ -758,9 +657,7 @@ app.listen(port, async () => {
 
     // Add stage column to Messages if it doesn't exist
     console.log("🔍 Checking for stage column in Messages table...");
-    const hasStageColumn = messageResults.some(
-      (column) => column.name === "stage"
-    );
+    const hasStageColumn = messageResults.some((column) => column.name === "stage");
     if (!hasStageColumn) {
       await sequelize.query("ALTER TABLE Messages ADD COLUMN stage STRING;");
       console.log("✅ Added stage column to Messages table");
@@ -770,9 +667,7 @@ app.listen(port, async () => {
 
     // Create admin user
     console.log("🔍 Creating admin user...");
-    const adminExists = await User.findOne({
-      where: { email: "admin@admin.com" },
-    });
+    const adminExists = await User.findOne({ where: { email: "admin@admin.com" } });
     if (!adminExists) {
       await User.create({
         id: require("uuid").v4(),
@@ -792,9 +687,7 @@ app.listen(port, async () => {
 
     // Create test designer
     console.log("🔍 Creating test designer...");
-    const designerExists = await User.findOne({
-      where: { email: "designer@example.com" },
-    });
+    const designerExists = await User.findOne({ where: { email: "designer@example.com" } });
     if (!designerExists) {
       await User.create({
         id: require("uuid").v4(),
@@ -813,9 +706,7 @@ app.listen(port, async () => {
 
     // Create test fan
     console.log("🔍 Creating test fan...");
-    const fanExists = await User.findOne({
-      where: { email: "fan@example.com" },
-    });
+    const fanExists = await User.findOne({ where: { email: "fan@example.com" } });
     if (!fanExists) {
       await User.create({
         id: require("uuid").v4(),
@@ -833,9 +724,7 @@ app.listen(port, async () => {
 
     // Create test shop
     console.log("🔍 Creating test shop...");
-    const shopExists = await User.findOne({
-      where: { email: "shop@test.com" },
-    });
+    const shopExists = await User.findOne({ where: { email: "shop@test.com" } });
     if (!shopExists) {
       await User.create({
         id: require("uuid").v4(),
@@ -854,9 +743,7 @@ app.listen(port, async () => {
 
     // Create trenton@test.com (designer)
     console.log("🔍 Creating trenton@test.com (designer)...");
-    const trentonExists = await User.findOne({
-      where: { email: "trenton@test.com" },
-    });
+    const trentonExists = await User.findOne({ where: { email: "trenton@test.com" } });
     if (!trentonExists) {
       await User.create({
         id: require("uuid").v4(),
@@ -870,10 +757,7 @@ app.listen(port, async () => {
       });
       console.log("✅ Trenton user created");
     } else {
-      console.log(
-        "ℹ️ Trenton user already exists, userType:",
-        trentonExists.userType
-      );
+      console.log("ℹ️ Trenton user already exists, userType:", trentonExists.userType);
     }
   } catch (error) {
     console.error("❌ Database Sync Error:", error.message);
