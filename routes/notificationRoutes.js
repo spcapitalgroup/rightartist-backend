@@ -12,6 +12,7 @@ module.exports = (wss) => {
       const notifications = await Notification.findAll({
         where: { userId: req.user.id },
         order: [["createdAt", "DESC"]],
+        attributes: ["id", "userId", "message", "isRead", "createdAt"], // Explicitly exclude updatedAt
       });
       res.json({ success: true, notifications });
     } catch (err) {
