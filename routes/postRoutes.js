@@ -109,6 +109,31 @@ module.exports = (wss, db) => {
     }
   });
 
+  router.get("/:postId", async (req, res) => {
+    const { Post, User, Comment } = db;
+    const { postId } = req.params;
+    try {
+      const post = await Post.findByPk(postId, {
+        include: [
+          { model: User, as: "user", attributes: ["id", "username"] },
+          { model: User, as: "shop", attributes: ["id", "username"] },
+          { model: User, as: "client", attributes: ["id", "username"] },
+          { model: Comment, as: "comments", include: [{ model: User, as: "user", attributes: ["id", "username"] }] },
+        ],
+      });
+
+      if (!post) {
+        return res.status(404).json({ message: "Post not found" });
+      }
+
+      console.log(`✅ Fetched post: ${postId}`);
+      res.json({ post });
+    } catch (error) {
+      console.error(`❌ Fetch Post Error for post ${postId}:`, error.message);
+      res.status(500).json({ message: "Server error" });
+    }
+  });
+
   router.post("/create", async (req, res) => {
     const { Post, User } = db;
     const { title, description, location, feedType } = req.body;
