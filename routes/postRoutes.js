@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const path = require("path"); // Import the path module
+const path = require("path");
 const cloudinary = require("cloudinary").v2;
 const multer = require("multer");
 
@@ -30,8 +30,16 @@ module.exports = (wss, db) => {
         return res.status(400).json({ message: "Invalid feed type" });
       }
 
+      let whereClause = { feedType };
+
+      // Restrict design feed to designers only
+      if (feedType === "design" && req.user.userType !== "designer") {
+        return res.status(403).json({ message: "Only designers can view the design feed" });
+      }
+
+      // For booking feed, no additional restrictions needed
       const posts = await Post.findAll({
-        where: { feedType },
+        where: whereClause,
         include: [
           { model: User, as: "user", attributes: ["id", "username"] },
           { model: User, as: "shop", attributes: ["id", "username"] },
@@ -62,12 +70,17 @@ module.exports = (wss, db) => {
         return res.status(400).json({ message: "Invalid feed type" });
       }
 
-      if (feedType === "design" && req.user.userType !== "fan") {
-        return res.status(403).json({ message: "Only fans can post design requests" });
+      // Permission checks
+      if (feedType === "design" && req.user.userType !== "shop") {
+        return res.status(403).json({ message: "Only shops can post design requests" });
       }
 
       if (feedType === "booking" && req.user.userType !== "fan") {
         return res.status(403).json({ message: "Only fans can post booking requests" });
+      }
+
+      if (req.user.userType === "designer") {
+        return res.status(403).json({ message: "Designers cannot create posts directly" });
       }
 
       const user = await User.findByPk(req.user.id);
@@ -82,7 +95,8 @@ module.exports = (wss, db) => {
         location,
         feedType,
         userId: req.user.id,
-        clientId: req.user.id,
+        clientId: feedType === "booking" ? req.user.id : null, // Set clientId for booking posts
+        shopId: feedType === "design" ? req.user.id : null, // Set shopId for design posts
         status: "open",
         images: [],
       });
