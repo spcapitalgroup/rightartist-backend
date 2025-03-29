@@ -1,8 +1,8 @@
 const express = require("express");
-const bcrypt = require("bcryptjs"); // Changed from bcrypt to bcryptjs
+const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const router = express.Router();
-const authenticateUser = require("../middleware/authMiddleware"); // Import the middleware
+const authenticateUser = require("../middleware/authMiddleware");
 
 router.post("/login", async (req, res) => {
   const { User } = req.app.get("db");
@@ -117,9 +117,16 @@ router.get("/me", authenticateUser, async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
     console.log("✅ User Fetched:", user.toJSON());
+    // Handle paymentInfo: check if it's a string and parse it, otherwise use it as-is
+    let paymentInfo = user.paymentInfo;
+    if (typeof paymentInfo === "string") {
+      paymentInfo = JSON.parse(paymentInfo);
+    } else if (!paymentInfo) {
+      paymentInfo = {};
+    }
     const userData = {
       ...user.toJSON(),
-      paymentInfo: user.paymentInfo ? JSON.parse(user.paymentInfo) : {},
+      paymentInfo,
     };
     res.json(userData);
   } catch (error) {
@@ -157,9 +164,16 @@ router.put("/me", authenticateUser, async (req, res) => {
     await user.update(updates);
     console.log("✅ User Updated:", user.toJSON());
 
+    // Handle paymentInfo for the response
+    let updatedPaymentInfo = user.paymentInfo;
+    if (typeof updatedPaymentInfo === "string") {
+      updatedPaymentInfo = JSON.parse(updatedPaymentInfo);
+    } else if (!updatedPaymentInfo) {
+      updatedPaymentInfo = {};
+    }
     const updatedUser = {
       ...user.toJSON(),
-      paymentInfo: user.paymentInfo ? JSON.parse(user.paymentInfo) : {},
+      paymentInfo: updatedPaymentInfo,
     };
     res.json(updatedUser);
   } catch (error) {
