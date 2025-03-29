@@ -12,6 +12,7 @@ router.get("/designer", async (req, res) => {
 
     const payments = await Payment.findAll({
       where: { userId: req.user.id, type: "design", status: "completed" },
+      attributes: ["id", "userId", "amount", "status", "type", "createdAt"], // Explicitly exclude updatedAt
     });
     const totalEarnings = payments.reduce((sum, p) => sum + p.amount * 0.9, 0);
     const designsSold = payments.length;
@@ -35,6 +36,7 @@ router.get("/shop", async (req, res) => {
     // Fetch payments for shop (e.g., from bookings or designs)
     const payments = await Payment.findAll({
       where: { userId: req.user.id, status: "completed" },
+      attributes: ["id", "userId", "amount", "status", "type", "createdAt"], // Explicitly exclude updatedAt
     });
     const totalEarnings = payments.reduce((sum, p) => sum + p.amount * 0.9, 0);
 
@@ -140,12 +142,12 @@ router.get("/users/monthly", async (req, res) => {
         createdAt: { [Op.between]: [startDate, endDate] },
       },
       attributes: [
-        // Use strftime for SQLite to group by year and month
-        [fn("strftime", literal("'%Y-%m'"), col("createdAt")), "month"],
+        // Use DATE_FORMAT for MySQL to group by year and month
+        [fn("DATE_FORMAT", col("createdAt"), literal("'%Y-%m'")), "month"],
         [fn("COUNT", col("id")), "count"],
       ],
-      group: [fn("strftime", literal("'%Y-%m'"), col("createdAt"))],
-      order: [[fn("strftime", literal("'%Y-%m'"), col("createdAt")), "ASC"]],
+      group: [fn("DATE_FORMAT", col("createdAt"), literal("'%Y-%m'"))],
+      order: [[fn("DATE_FORMAT", col("createdAt"), literal("'%Y-%m'")), "ASC"]],
     });
 
     const labels = [];
@@ -195,7 +197,7 @@ router.get("/churn", async (req, res) => {
 
       const failedPayments = await Payment.count({
         where: {
-          userId: { [Op.in]: literal(`(SELECT id FROM "Users" WHERE "userType" = 'shop')`) },
+          userId: { [Op.in]: literal(`(SELECT id FROM Users WHERE userType = 'shop')`) },
           status: "failed",
           createdAt: { [Op.between]: [startOfCurrentMonth, endOfCurrentMonth] },
         },
@@ -225,10 +227,10 @@ router.get("/churn", async (req, res) => {
           userType,
           id: {
             [Op.in]: literal(`
-              SELECT DISTINCT "userId" FROM (
-                SELECT "userId" FROM "Posts" WHERE "createdAt" >= date('now', '-30 days')
+              SELECT DISTINCT userId FROM (
+                SELECT userId FROM Posts WHERE createdAt >= DATE_SUB(NOW(), INTERVAL 30 DAY)
                 UNION
-                SELECT "userId" FROM "Comments" WHERE "createdAt" >= date('now', '-30 days')
+                SELECT userId FROM Comments WHERE createdAt >= DATE_SUB(NOW(), INTERVAL 30 DAY)
               ) AS activity
             `),
           },
