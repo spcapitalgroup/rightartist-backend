@@ -44,13 +44,26 @@ module.exports = (wss, db) => {
           { model: User, as: "user", attributes: ["id", "username"] },
           { model: User, as: "shop", attributes: ["id", "username"] },
           { model: User, as: "client", attributes: ["id", "username"] },
-          { model: Comment, as: "comments", include: [{ model: User, as: "user", attributes: ["id", "username"] }] },
+          {
+            model: Comment,
+            as: "comments",
+            include: [
+              { model: User, as: "user", attributes: ["id", "username"] },
+              { model: Comment, as: "replies", include: [{ model: User, as: "user", attributes: ["id", "username"] }] },
+            ],
+          },
         ],
         order: [["createdAt", "DESC"]],
       });
 
+      // Ensure images is always an array for each post
+      const postsWithImages = posts.map((post) => ({
+        ...post.toJSON(),
+        images: Array.isArray(post.images) ? post.images : [],
+      }));
+
       console.log(`✅ Fetched ${feedType} feed for user:`, req.user.id);
-      res.json({ posts });
+      res.json({ posts: postsWithImages });
     } catch (error) {
       console.error(`❌ Feed Fetch Error (${feedType}):`, error.message);
       res.status(500).json({ message: "Server error" });
@@ -70,13 +83,26 @@ module.exports = (wss, db) => {
           { model: User, as: "user", attributes: ["id", "username"] },
           { model: User, as: "shop", attributes: ["id", "username"] },
           { model: User, as: "client", attributes: ["id", "username"] },
-          { model: Comment, as: "comments", include: [{ model: User, as: "user", attributes: ["id", "username"] }] },
+          {
+            model: Comment,
+            as: "comments",
+            include: [
+              { model: User, as: "user", attributes: ["id", "username"] },
+              { model: Comment, as: "replies", include: [{ model: User, as: "user", attributes: ["id", "username"] }] },
+            ],
+          },
         ],
         order: [["createdAt", "DESC"]],
       });
 
+      // Ensure images is always an array for each post
+      const postsWithImages = posts.map((post) => ({
+        ...post.toJSON(),
+        images: Array.isArray(post.images) ? post.images : [],
+      }));
+
       console.log(`✅ Fetched design posts for user: ${userId}`);
-      res.json({ posts });
+      res.json({ posts: postsWithImages });
     } catch (error) {
       console.error(`❌ Fetch Design Posts Error for user ${userId}:`, error.message);
       res.status(500).json({ message: "Server error" });
@@ -96,13 +122,26 @@ module.exports = (wss, db) => {
           { model: User, as: "user", attributes: ["id", "username"] },
           { model: User, as: "shop", attributes: ["id", "username"] },
           { model: User, as: "client", attributes: ["id", "username"] },
-          { model: Comment, as: "comments", include: [{ model: User, as: "user", attributes: ["id", "username"] }] },
+          {
+            model: Comment,
+            as: "comments",
+            include: [
+              { model: User, as: "user", attributes: ["id", "username"] },
+              { model: Comment, as: "replies", include: [{ model: User, as: "user", attributes: ["id", "username"] }] },
+            ],
+          },
         ],
         order: [["createdAt", "DESC"]],
       });
 
+      // Ensure images is always an array for each post
+      const postsWithImages = posts.map((post) => ({
+        ...post.toJSON(),
+        images: Array.isArray(post.images) ? post.images : [],
+      }));
+
       console.log(`✅ Fetched booking posts for user: ${userId}`);
-      res.json({ posts });
+      res.json({ posts: postsWithImages });
     } catch (error) {
       console.error(`❌ Fetch Booking Posts Error for user ${userId}:`, error.message);
       res.status(500).json({ message: "Server error" });
@@ -118,7 +157,14 @@ module.exports = (wss, db) => {
           { model: User, as: "user", attributes: ["id", "username"] },
           { model: User, as: "shop", attributes: ["id", "username"] },
           { model: User, as: "client", attributes: ["id", "username"] },
-          { model: Comment, as: "comments", include: [{ model: User, as: "user", attributes: ["id", "username"] }] },
+          {
+            model: Comment,
+            as: "comments",
+            include: [
+              { model: User, as: "user", attributes: ["id", "username"] },
+              { model: Comment, as: "replies", include: [{ model: User, as: "user", attributes: ["id", "username"] }] },
+            ],
+          },
         ],
       });
 
@@ -126,8 +172,14 @@ module.exports = (wss, db) => {
         return res.status(404).json({ message: "Post not found" });
       }
 
-      console.log(`✅ Fetched post: ${postId}`);
-      res.json({ post });
+      // Ensure images is always an array
+      const postData = {
+        ...post.toJSON(),
+        images: Array.isArray(post.images) ? post.images : [],
+      };
+
+      console.log(`✅ Fetched post: ${postId}`, postData);
+      res.json({ post: postData });
     } catch (error) {
       console.error(`❌ Fetch Post Error for post ${postId}:`, error.message);
       res.status(500).json({ message: "Server error" });
@@ -175,7 +227,7 @@ module.exports = (wss, db) => {
         clientId: feedType === "booking" ? req.user.id : null, // Set clientId for booking posts
         shopId: feedType === "design" ? req.user.id : null, // Set shopId for design posts
         status: "open",
-        images: [],
+        images: [], // Ensure images is always an array
       });
 
       console.log("✅ Post created by user:", req.user.id, "Type:", feedType);
@@ -209,36 +261,38 @@ module.exports = (wss, db) => {
 
       const imageUrls = [];
       for (const file of req.files) {
-        const result = await cloudinary.uploader.upload_stream(
-          {
-            folder: "rightartist/posts",
-            transformation: [
-              {
-                overlay: {
-                  font_family: "Arial",
-                  font_size: 30,
-                  text: "SPCapital ©",
+        const result = await new Promise((resolve, reject) => {
+          cloudinary.uploader.upload_stream(
+            {
+              folder: "rightartist/posts",
+              transformation: [
+                {
+                  overlay: {
+                    font_family: "Arial",
+                    font_size: 30,
+                    text: "SPCapital ©",
+                  },
+                  gravity: "center",
+                  y: -20,
+                  x: 10,
+                  color: "black",
                 },
-                gravity: "center",
-                y: -20,
-                x: 10,
-                color: "black",
-              },
-            ],
-          },
-          (error, result) => {
-            if (error) {
-              console.error("❌ Cloudinary Upload Error:", error);
-              throw new Error("Failed to upload image to Cloudinary");
+              ],
+            },
+            (error, result) => {
+              if (error) {
+                console.error("❌ Cloudinary Upload Error:", error);
+                reject(new Error("Failed to upload image to Cloudinary"));
+              }
+              resolve(result);
             }
-            return result;
-          }
-        ).end(file.buffer);
+          ).end(file.buffer);
+        });
 
         imageUrls.push(result.secure_url);
       }
 
-      const updatedImages = [...(post.images || []), ...imageUrls];
+      const updatedImages = [...(Array.isArray(post.images) ? post.images : []), ...imageUrls];
       await post.update({ images: updatedImages });
 
       console.log("✅ Images uploaded for post:", postId, "URLs:", imageUrls);
