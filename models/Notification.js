@@ -1,5 +1,7 @@
 module.exports = (sequelize, DataTypes) => {
-    const Notification = sequelize.define("Notification", {
+  const Notification = sequelize.define(
+    "Notification",
+    {
       id: {
         type: DataTypes.UUID,
         defaultValue: DataTypes.UUIDV4,
@@ -21,11 +23,16 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.DATE,
         defaultValue: DataTypes.NOW,
       },
-    });
-  
-    Notification.associate = (models) => {
-      Notification.belongsTo(models.User, { foreignKey: "userId", as: "user" });
-    };
-  
-    return Notification;
+    },
+    {
+      // Disable the automatic addition of updatedAt
+      timestamps: false,
+    }
+  );
+
+  Notification.associate = (models) => {
+    Notification.belongsTo(models.User, { foreignKey: "userId", as: "user" });
   };
+
+  return Notification;
+};
