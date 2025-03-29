@@ -1,3 +1,4 @@
+// @ts-nocheck
 module.exports = (sequelize, DataTypes) => {
   const Notification = sequelize.define(
     "Notification",
@@ -19,14 +20,13 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.BOOLEAN,
         defaultValue: false,
       },
-      createdAt: {
-        type: DataTypes.DATE,
-        defaultValue: DataTypes.NOW,
-      },
     },
     {
-      // Disable the automatic addition of updatedAt
-      timestamps: false,
+      // Enable timestamps so createdAt is auto-handled,
+      // but disable updatedAt so it isn't used in inserts/updates.
+      timestamps: true,
+      createdAt: "createdAt",
+      updatedAt: false,
     }
   );
 
