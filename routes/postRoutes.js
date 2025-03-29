@@ -83,6 +83,32 @@ module.exports = (wss, db) => {
     }
   });
 
+  router.get("/user/:userId/booking", async (req, res) => {
+    const { Post, User, Comment } = db;
+    const { userId } = req.params;
+    try {
+      const posts = await Post.findAll({
+        where: {
+          userId,
+          feedType: "booking",
+        },
+        include: [
+          { model: User, as: "user", attributes: ["id", "username"] },
+          { model: User, as: "shop", attributes: ["id", "username"] },
+          { model: User, as: "client", attributes: ["id", "username"] },
+          { model: Comment, as: "comments", include: [{ model: User, as: "user", attributes: ["id", "username"] }] },
+        ],
+        order: [["createdAt", "DESC"]],
+      });
+
+      console.log(`✅ Fetched booking posts for user: ${userId}`);
+      res.json({ posts });
+    } catch (error) {
+      console.error(`❌ Fetch Booking Posts Error for user ${userId}:`, error.message);
+      res.status(500).json({ message: "Server error" });
+    }
+  });
+
   router.post("/create", async (req, res) => {
     const { Post, User } = db;
     const { title, description, location, feedType } = req.body;
