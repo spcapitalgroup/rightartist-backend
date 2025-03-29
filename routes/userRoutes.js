@@ -1,25 +1,17 @@
 const express = require("express");
 const router = express.Router();
 const multer = require("multer");
-const path = require("path");
 const { v4: uuidv4 } = require("uuid");
+const cloudinary = require("cloudinary").v2;
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, "uploads");
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, `${uniqueSuffix}${path.extname(file.originalname)}`);
-  },
-});
-
+// Configure Multer for temporary file uploads (we'll upload to Cloudinary)
+const storage = multer.memoryStorage();
 const upload = multer({
   storage,
   fileFilter: (req, file, cb) => {
     console.log("🔍 Multer received file:", file);
     const filetypes = /jpeg|jpg|png/;
-    const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
+    const extname = filetypes.test(file.originalname.toLowerCase());
     const mimetype = filetypes.test(file.mimetype);
     if (extname && mimetype) {
       return cb(null, true);
@@ -196,12 +188,41 @@ router.post("/:id/portfolio", upload, async (req, res) => {
       return res.status(400).json({ message: "No images uploaded" });
     }
 
-    const newImages = req.files.map(file => ({
-      imageUrl: file.filename,
-      style: style || "Unknown",
-      date: new Date().toISOString(),
-      description: description || "",
-    }));
+    const newImages = [];
+    for (const file of req.files) {
+      const result = await cloudinary.uploader.upload_stream(
+        {
+          folder: "rightartist/portfolio",
+          transformation: [
+            {
+              overlay: {
+                font_family: "Arial",
+                font_size: 30,
+                text: "SPCapital ©",
+              },
+              gravity: "center",
+              y: -20,
+              x: 10,
+              color: "black",
+            },
+          ],
+        },
+        (error, result) => {
+          if (error) {
+            console.error("❌ Cloudinary Upload Error:", error);
+            throw new Error("Failed to upload image to Cloudinary");
+          }
+          return result;
+        }
+      ).end(file.buffer);
+
+      newImages.push({
+        imageUrl: result.secure_url,
+        style: style || "Unknown",
+        date: new Date().toISOString(),
+        description: description || "",
+      });
+    }
 
     const updatedPortfolio = [...(user.portfolio || []), ...newImages];
     await user.update({ portfolio: updatedPortfolio });

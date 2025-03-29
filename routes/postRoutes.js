@@ -1,26 +1,24 @@
 const express = require("express");
 const router = express.Router();
 const multer = require("multer");
-const path = require("path");
-const fs = require("fs");
+const cloudinary = require("cloudinary").v2;
 
-// Define uploads path (rightartist-backend/uploads)
-const uploadsPath = path.join(__dirname, "../uploads");
-if (!fs.existsSync(uploadsPath)) {
-  fs.mkdirSync(uploadsPath, { recursive: true });
-  console.log(`✅ Created uploads directory: ${uploadsPath}`);
-}
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadsPath); // Save to rightartist-backend/uploads
+// Configure Multer for temporary file uploads (we'll upload to Cloudinary)
+const storage = multer.memoryStorage(); // Use memory storage since we won't save to disk
+const upload = multer({
+  storage,
+  fileFilter: (req, file, cb) => {
+    console.log("🔍 Multer received file:", file);
+    const filetypes = /jpeg|jpg|png/;
+    const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = filetypes.test(file.mimetype);
+    if (extname && mimetype) {
+      return cb(null, true);
+    }
+    cb(new Error("Only JPEG/JPG/PNG images are allowed"));
   },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, `${uniqueSuffix}-${file.originalname}`);
-  },
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
 });
-const upload = multer({ storage });
 
 module.exports = (wss, db) => {
   const Post = db.Post;
@@ -63,17 +61,48 @@ module.exports = (wss, db) => {
         return res.status(400).json({ message: "Post ID is required" });
       }
 
-      const imagePaths = files.map(file => file.filename);
       const post = await Post.findByPk(postId);
       if (!post) {
         return res.status(404).json({ message: "Post not found" });
       }
 
-      post.images = [...(post.images || []), ...imagePaths];
+      // Upload images to Cloudinary with watermark
+      const imageUrls = [];
+      for (const file of files) {
+        const result = await cloudinary.uploader.upload_stream(
+          {
+            folder: "rightartist/posts",
+            transformation: [
+              {
+                overlay: {
+                  font_family: "Arial",
+                  font_size: 30,
+                  text: "SPCapital ©",
+                },
+                gravity: "center",
+                y: -20,
+                x: 10,
+                color: "black",
+              },
+            ],
+          },
+          (error, result) => {
+            if (error) {
+              console.error("❌ Cloudinary Upload Error:", error);
+              throw new Error("Failed to upload image to Cloudinary");
+            }
+            return result;
+          }
+        ).end(file.buffer);
+
+        imageUrls.push(result.secure_url);
+      }
+
+      post.images = [...(post.images || []), ...imageUrls];
       await post.save();
 
-      console.log(`✅ Uploaded images for post ${postId} to ${uploadsPath}:`, imagePaths);
-      res.status(200).json({ images: imagePaths });
+      console.log(`✅ Uploaded images for post ${postId} to Cloudinary:`, imageUrls);
+      res.status(200).json({ images: imageUrls });
     } catch (err) {
       console.error("❌ Upload Error:", err);
       res.status(500).json({ message: "Failed to upload images" });

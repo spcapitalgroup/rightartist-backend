@@ -1,26 +1,17 @@
 const express = require("express");
 const router = express.Router();
 const multer = require("multer");
-const path = require("path");
-const fs = require("fs");
-const sharp = require("sharp");
+const cloudinary = require("cloudinary").v2;
+const { v4: uuidv4 } = require("uuid");
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, "uploads");
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, `${uniqueSuffix}${path.extname(file.originalname)}`);
-  },
-});
-
+// Configure Multer for temporary file uploads (we'll upload to Cloudinary)
+const storage = multer.memoryStorage();
 const upload = multer({
   storage,
   fileFilter: (req, file, cb) => {
     console.log("🔍 Multer received file:", file);
     const filetypes = /jpeg|jpg|png/;
-    const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
+    const extname = filetypes.test(file.originalname.toLowerCase());
     const mimetype = filetypes.test(file.mimetype);
     if (extname && mimetype) {
       return cb(null, true);
@@ -29,40 +20,6 @@ const upload = multer({
   },
   limits: { fileSize: 5 * 1024 * 1024 },
 }).array("images", 5);
-
-const addWatermark = async (buffer, outputFilePath) => {
-  const watermarkText = "SPCapital \u00A9"; // Watermark text with copyright sign
-
-  try {
-    const { width, height } = await sharp(buffer).metadata();
-    const watermarkSVG = `<svg width="${width / 2}" height="${height / 10}">
-      <text x="10" y="${height / 15}" font-family="Arial" font-size="30" fill="black">${watermarkText}</text>
-    </svg>`;
-
-    await sharp(buffer)
-      .composite([
-        {
-          input: Buffer.from(watermarkSVG),
-          gravity: "centre",
-          top: 20,
-          left: 10,
-        },
-      ])
-      .toFile(outputFilePath);
-
-    console.log("✅ Watermark added to:", outputFilePath);
-    // Verify file exists after writing
-    if (fs.existsSync(outputFilePath)) {
-      console.log("✅ File verified on disk:", outputFilePath);
-    } else {
-      console.error("❌ File not found on disk after writing:", outputFilePath);
-    }
-    return outputFilePath;
-  } catch (error) {
-    console.error("❌ Error adding watermark:", error.message);
-    throw new Error("Error adding watermark: " + error.message);
-  }
-};
 
 router.get("/pending", async (req, res) => {
   const { Design, User, Post, Comment } = req.app.get("db");
@@ -321,25 +278,41 @@ router.put("/:designId/stage", upload, async (req, res) => {
       return res.status(400).json({ message: "Cannot update stage of a purchased design" });
     }
 
-    let imageFilenames = design.images || [];
+    let imageUrls = design.images || [];
     if (req.files && req.files.length > 0) {
-      console.log("🔍 Applying watermark to design stage images");
-      try {
-        for (const file of req.files) {
-          const filePath = path.join("uploads", file.filename);
-          const outputFilePath = path.join("uploads", "watermarked-" + file.filename);
-          const buffer = fs.readFileSync(filePath);
-          const watermarkedFilePath = await addWatermark(buffer, outputFilePath);
-          fs.unlinkSync(filePath);
-          imageFilenames.push(path.basename(watermarkedFilePath));
-        }
-      } catch (error) {
-        console.error("❌ Watermark Application Error:", error.message);
-        return res.status(500).json({ message: "Error applying watermark", error: error.message });
+      console.log("🔍 Uploading design stage images to Cloudinary");
+      for (const file of req.files) {
+        const result = await cloudinary.uploader.upload_stream(
+          {
+            folder: "rightartist/designs",
+            transformation: [
+              {
+                overlay: {
+                  font_family: "Arial",
+                  font_size: 30,
+                  text: "SPCapital ©",
+                },
+                gravity: "center",
+                y: -20,
+                x: 10,
+                color: "black",
+              },
+            ],
+          },
+          (error, result) => {
+            if (error) {
+              console.error("❌ Cloudinary Upload Error:", error);
+              throw new Error("Failed to upload image to Cloudinary");
+            }
+            return result;
+          }
+        ).end(file.buffer);
+
+        imageUrls.push(result.secure_url);
       }
     }
 
-    await design.update({ stage, images: imageFilenames });
+    await design.update({ stage, images: imageUrls });
 
     const notificationMessage = `Design stage updated to "${stage}" by ${design.designer.username} for "${design.Post.title}"`;
     const notification = await Notification.create({
@@ -362,7 +335,7 @@ router.put("/:designId/stage", upload, async (req, res) => {
       content: `I’ve updated the design for "${design.Post.title}" to stage: ${stage}`,
       designId: design.id,
       stage: stage,
-      images: imageFilenames,
+      images: imageUrls,
     });
 
     const designerClient = clients.get(req.user.id);

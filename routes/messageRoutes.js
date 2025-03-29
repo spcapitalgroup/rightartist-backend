@@ -1,26 +1,16 @@
 const express = require("express");
 const router = express.Router();
 const multer = require("multer");
-const path = require("path");
-const fs = require("fs");
-const sharp = require("sharp");
+const cloudinary = require("cloudinary").v2;
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, "uploads");
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, `${uniqueSuffix}${path.extname(file.originalname)}`);
-  },
-});
-
+// Configure Multer for temporary file uploads (we'll upload to Cloudinary)
+const storage = multer.memoryStorage();
 const upload = multer({
   storage,
   fileFilter: (req, file, cb) => {
     console.log("🔍 Multer received file:", file);
     const filetypes = /jpeg|jpg|png/;
-    const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
+    const extname = filetypes.test(file.originalname.toLowerCase());
     const mimetype = filetypes.test(file.mimetype);
     if (extname && mimetype) {
       return cb(null, true);
@@ -29,38 +19,6 @@ const upload = multer({
   },
   limits: { fileSize: 5 * 1024 * 1024 },
 }).array("images", 5);
-
-const addWatermark = async (buffer, outputFilePath) => {
-  const watermarkText = "SPCapital \u00A9"; // Watermark text with copyright sign
-
-  try {
-    // Get the image's dimensions
-    const { width, height } = await sharp(buffer).metadata();
-
-    // Create the watermark SVG, scaled to fit the image's size
-    const watermarkSVG = `<svg width="${width / 2}" height="${height / 10}">
-      <text x="10" y="${height / 15}" font-family="Arial" font-size="30" fill="black">${watermarkText}</text>
-    </svg>`;
-
-    // Apply the watermark using sharp
-    await sharp(buffer)
-      .composite([
-        {
-          input: Buffer.from(watermarkSVG),
-          gravity: "centre",
-          top: 20,
-          left: 10,
-        },
-      ])
-      .toFile(outputFilePath); // Save watermarked image to the disk
-
-    console.log("✅ Watermark added to:", outputFilePath);
-    return outputFilePath;
-  } catch (error) {
-    console.error("❌ Error adding watermark:", error.message);
-    throw new Error("Error adding watermark: " + error.message);
-  }
-};
 
 router.get("/inbox", async (req, res) => {
   const { Message, User } = req.app.get("db");
@@ -143,7 +101,7 @@ router.get("/users", async (req, res) => {
 });
 
 router.post("/send", upload, async (req, res) => {
-  const { Message, User, Notification, Post, Comment, Design } = req.app.get("db");
+  const { Message, User, Notification } = req.app.get("db");
   const clients = req.app.get("wsClients");
   const { receiverId, content, designId, stage } = req.body;
 
@@ -205,22 +163,38 @@ router.post("/send", upload, async (req, res) => {
       }
     }
 
-    // Handle image uploads
-    let imageFilenames = [];
+    // Handle image uploads to Cloudinary with watermark
+    let imageUrls = [];
     if (req.files && req.files.length > 0) {
-      console.log("🔍 Applying watermark to message images");
-      try {
-        for (const file of req.files) {
-          const filePath = path.join("uploads", file.filename);
-          const outputFilePath = path.join("uploads", "watermarked-" + file.filename);
-          const buffer = fs.readFileSync(filePath);
-          const watermarkedFilePath = await addWatermark(buffer, outputFilePath);
-          fs.unlinkSync(filePath);
-          imageFilenames.push(path.basename(watermarkedFilePath));
-        }
-      } catch (error) {
-        console.error("❌ Watermark Application Error:", error.message);
-        return res.status(500).json({ message: "Error applying watermark", error: error.message });
+      console.log("🔍 Uploading message images to Cloudinary");
+      for (const file of req.files) {
+        const result = await cloudinary.uploader.upload_stream(
+          {
+            folder: "rightartist/messages",
+            transformation: [
+              {
+                overlay: {
+                  font_family: "Arial",
+                  font_size: 30,
+                  text: "SPCapital ©",
+                },
+                gravity: "center",
+                y: -20,
+                x: 10,
+                color: "black",
+              },
+            ],
+          },
+          (error, result) => {
+            if (error) {
+              console.error("❌ Cloudinary Upload Error:", error);
+              throw new Error("Failed to upload image to Cloudinary");
+            }
+            return result;
+          }
+        ).end(file.buffer);
+
+        imageUrls.push(result.secure_url);
       }
     }
 
@@ -232,7 +206,7 @@ router.post("/send", upload, async (req, res) => {
       designId: designId || null,
       stage: stage || null,
       isRead: false,
-      images: imageFilenames,
+      images: imageUrls,
     });
 
     const ws = clients.get(receiverId);
