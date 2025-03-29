@@ -1,6 +1,6 @@
 const express = require("express");
 const cors = require("cors");
-const bcrypt = require("bcryptjs"); // Changed from bcrypt to bcryptjs
+const bcrypt = require("bcryptjs");
 const { Sequelize, Op } = require("sequelize");
 const WebSocket = require("ws");
 const path = require("path");
@@ -11,7 +11,10 @@ require("dotenv").config();
 
 const app = express();
 const port = process.env.PORT || 3000;
-const wss = new WebSocket.Server({ port: 3002 });
+
+// Create HTTP server and attach WebSocket server to it
+const server = require("http").createServer(app);
+const wss = new WebSocket.Server({ server });
 
 // Configure Cloudinary
 cloudinary.config({
@@ -66,7 +69,11 @@ app.use((req, res, next) => {
 });
 
 // Other middleware
-app.use(cors());
+app.use(cors({
+  origin: ["https://rightartistry.com", "https://www.rightartistry.com"],
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+}));
 app.use(express.json());
 
 // Sequelize setup for PlanetScale
@@ -399,7 +406,7 @@ console.log("🔍 Mounting bookingRoutes for /api/bookings");
 app.use("/api/bookings", authenticateUser, bookingRoutes);
 
 // Start server
-app.listen(port, async () => {
+server.listen(port, async () => {
   console.log(`🚀 Server is running on port ${port}`);
   try {
     await sequelize.sync({ force: false });
